@@ -38,6 +38,9 @@ bld/
 # Visual Studio 2015/2017 cache/options directory
 .vs/
 # Uncomment if you have tasks that create the project's static files in wwwroot
+
+# Ignore wwwroot/lib directory (libraries managed by package managers like LibMan or npm)
+*/wwwroot/lib/
 #wwwroot/
 
 # Visual Studio 2017 auto generated files
@@ -482,6 +485,3 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
-
-# webapp lib
-wwwroot/lib/
