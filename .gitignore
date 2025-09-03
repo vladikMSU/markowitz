@@ -485,3 +485,6 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+Markowitz.Core/net9.0/Markowitz.Core.dll
+Markowitz.Core/net9.0/Markowitz.Core.deps.json
+.vscode/launch.json
