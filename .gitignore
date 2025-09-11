@@ -488,3 +488,6 @@ $RECYCLE.BIN/
 Markowitz.Core/net9.0/Markowitz.Core.dll
 Markowitz.Core/net9.0/Markowitz.Core.deps.json
 .vscode/launch.json
+
+# testreport
+coveragereport/

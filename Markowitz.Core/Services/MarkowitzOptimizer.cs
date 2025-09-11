@@ -31,6 +31,11 @@ public class MarkowitzOptimizer
         var mu = muDaily * K;
         var sigma = sigmaDaily * K;
 
+        // ... внутри Optimize после вычисления sigma (годовой ковариации)
+        double ridge = 1e-8; // можно вынести в опции
+        for (int i = 0; i < sigma.RowCount; i++)
+            sigma[i, i] += ridge;
+
         // Инверсия Σ
         var sigmaInv = sigma.Inverse();
         var one = Vector<double>.Build.Dense(n, 1.0);

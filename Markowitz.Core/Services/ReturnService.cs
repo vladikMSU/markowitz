@@ -5,56 +5,85 @@ namespace Markowitz.Core.Services;
 public class ReturnService
 {
     public (string[] tickers, double[,] returnsMatrix, int nObs, DateTime[] dates)
-        BuildAlignedLogReturns(OptimizationRequest req)
+    BuildAlignedLogReturns(OptimizationRequest req)
     {
-        // 1) Соберём close по каждому тикеру
-        var series = new Dictionary<string, List<(DateTime dt, double close)>>();
+        if (req.PricesByTicker == null || req.PricesByTicker.Count == 0)
+            throw new ArgumentException("No tickers provided.");
 
-        foreach (var (ticker, bars) in req.PricesByTicker)
+        // 1) Собираем последовательности (dt, close) ПО ВСЕМ тикерам
+        var series = new Dictionary<string, List<(DateTime dt, double close)>>();
+        foreach (var kv in req.PricesByTicker)
         {
+            var ticker = kv.Key;
+            var bars = kv.Value ?? new List<PriceBar>();
             var ordered = bars.OrderBy(b => b.Timestamp).ToList();
-            var list = new List<(DateTime, double)>();
+
+            var list = new List<(DateTime dt, double close)>(ordered.Count);
             foreach (var b in ordered)
+            {
+                // используем Date (без времени) для выравнивания по торговым дням
                 list.Add((b.Timestamp.Date, (double)b.Close));
+            }
             series[ticker] = list;
         }
 
-        // 2) Пересечём даты
-        var allDates = series.Values
-            .Select(s => s.Select(p => p.dt).Distinct())
-            .Aggregate((acc, s) => acc.Intersect(s).ToHashSet())
-            .OrderBy(d => d)
+        // 2) Пересечение дат
+        var dateSets = series.Values
+            .Select(lst => lst.Select(x => x.dt).ToHashSet())
             .ToList();
 
-        // Период
+        if (dateSets.Count == 0) throw new InvalidOperationException("Empty series.");
+
+        var intersect = new HashSet<DateTime>(dateSets[0]);
+        foreach (var s in dateSets.Skip(1)) intersect.IntersectWith(s);
+
+        var allDates = intersect.OrderBy(d => d).ToList();
+
+        // Период/Lookback фильтры
         if (req.Start.HasValue) allDates = allDates.Where(d => d >= req.Start.Value.Date).ToList();
         if (req.End.HasValue)   allDates = allDates.Where(d => d <= req.End.Value.Date).ToList();
-        if (req.LookbackDays is int lb && allDates.Count > lb) allDates = allDates.Skip(Math.Max(0, allDates.Count - lb)).ToList();
+        if (req.LookbackDays is int lb && allDates.Count > lb)
+            allDates = allDates.Skip(allDates.Count - lb).ToList();
 
-        // 3) Матрица цен
-        var tickers = series.Keys.OrderBy(k => k).ToArray();
-        var prices = new double[allDates.Count, tickers.Length];
-        for (int j = 0; j < tickers.Length; j++)
+        if (allDates.Count < 2)
+            throw new InvalidOperationException("Not enough aligned dates for returns.");
+
+        // 3) Тикеры — БЕРЁМ ИЗ ЗАПРОСА (не из временного словаря), чтобы ничего не потерять
+        var tickers = req.PricesByTicker.Keys.OrderBy(k => k).ToArray();
+
+        // 4) Матрица цен на allDates (пересечение — гарантирует наличие ключей)
+        var nT = tickers.Length;
+        var prices = new double[allDates.Count, nT];
+
+        for (int j = 0; j < nT; j++)
         {
-            var map = series[tickers[j]].ToDictionary(x => x.dt, x => x.close);
+            var seq = series[tickers[j]];
+            var map = seq.ToDictionary(x => x.dt, x => x.close);
             for (int t = 0; t < allDates.Count; t++)
-                prices[t, j] = map[allDates[t]];
-        }
-
-        // 4) Лог-доходности
-        var nObs = allDates.Count - 1;
-        var rets = new double[nObs, tickers.Length];
-        var usedDates = allDates.Skip(1).ToArray();
-
-        for (int t = 1; t < allDates.Count; t++)
-        {
-            for (int j = 0; j < tickers.Length; j++)
             {
-                var rt = Math.Log(prices[t, j] / prices[t - 1, j]);
-                rets[t - 1, j] = double.IsFinite(rt) ? rt : 0.0;
+                if (!map.TryGetValue(allDates[t], out var px))
+                    throw new InvalidOperationException($"Missing price for {tickers[j]} on {allDates[t]:yyyy-MM-dd}");
+                prices[t, j] = px;
             }
         }
 
-        return (tickers, rets, nObs, usedDates);
+        // 5) Лог-доходности
+        var nObs = allDates.Count - 1;
+        var rets = new double[nObs, nT];
+        var retDates = new DateTime[nObs]; // даты, на которые рассчитываются доходности (t=1..T-1)
+
+        for (int t = 1; t < allDates.Count; t++)
+        {
+            retDates[t - 1] = allDates[t];
+            for (int j = 0; j < nT; j++)
+            {
+                var r = Math.Log(prices[t, j] / prices[t - 1, j]);
+                rets[t - 1, j] = double.IsFinite(r) ? r : 0.0;
+            }
+        }
+
+        // возвращаем даты доходностей (как и было в твоём тесте сейчас)
+        return (tickers, rets, nObs, retDates);
     }
+
 }
