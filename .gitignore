@@ -491,3 +491,4 @@ Markowitz.Core/net9.0/Markowitz.Core.deps.json
 
 # testreport
 coveragereport/
+tests/Markowitz.Tests/TestData
