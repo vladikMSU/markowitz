@@ -1,5 +1,7 @@
 using System.Text;
 using Markowitz.Core.Models;
+using Markowitz.Core.Services;
+using Markowitz.Core.Services.Optimizers;
 
 namespace Markowitz.Tests;
 
@@ -25,5 +27,17 @@ public static class TestUtils
         foreach (var r in rows)
             sb.AppendLine($"{r.Date},{r.Close},{r.High},{r.Low},{r.Open},{r.Volume}");
         return sb.ToString();
+    }
+
+    public static MarkowitzOptimizer CreateOptimizer()
+    {
+        IPortfolioOptimizer[] optimizers =
+        {
+            new ClosedFormOptimizer(),
+            new QpOptimizer(),
+            new LpCvarOptimizer(),
+            new HeuristicOptimizer()
+        };
+        return new MarkowitzOptimizer(new ReturnService(), optimizers);
     }
 }

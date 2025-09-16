@@ -1,4 +1,5 @@
 using Markowitz.Core.Services;
+using Markowitz.Core.Services.Optimizers;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddRazorPages()
@@ -8,6 +9,10 @@ builder.Services.AddRazorPages()
     ;
 
 builder.Services.AddSingleton<ReturnService>();
+builder.Services.AddSingleton<IPortfolioOptimizer, ClosedFormOptimizer>();
+builder.Services.AddSingleton<IPortfolioOptimizer, QpOptimizer>();
+builder.Services.AddSingleton<IPortfolioOptimizer, LpCvarOptimizer>();
+builder.Services.AddSingleton<IPortfolioOptimizer, HeuristicOptimizer>();
 builder.Services.AddSingleton<MarkowitzOptimizer>();
 
 var app = builder.Build();

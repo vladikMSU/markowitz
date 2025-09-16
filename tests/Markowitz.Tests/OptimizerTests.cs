@@ -1,6 +1,8 @@
 using Markowitz.Core.Models;
 using Markowitz.Core.Services;
+using Markowitz.Core.Services.Optimizers;
 using Xunit;
+
 
 namespace Markowitz.Tests;
 
@@ -58,7 +60,7 @@ public class OptimizerTests
             ["A"] = barsA, ["B"] = barsB
         });
 
-        var opt = new MarkowitzOptimizer();
+        var opt = TestUtils.CreateOptimizer();
         var res = opt.Optimize(req);
 
         var wA = res.Weights["A"];
@@ -97,7 +99,7 @@ public class OptimizerTests
             ["A"] = barsA, ["B"] = barsB
         });
 
-        var opt = new MarkowitzOptimizer();
+        var opt = TestUtils.CreateOptimizer();
         var gmv = opt.Optimize(reqGMV);
 
         var target = gmv.ExpectedReturnAnnual;
@@ -133,7 +135,7 @@ public class OptimizerTests
             ["A"] = barsA, ["B"] = barsB
         });
 
-        var opt = new MarkowitzOptimizer();
+        var opt = TestUtils.CreateOptimizer();
         var res = opt.Optimize(req);
 
         var sum = res.Weights.Values.Sum();
@@ -142,3 +144,4 @@ public class OptimizerTests
         Assert.All(res.Weights.Values, v => Assert.True(double.IsFinite(v)));
     }
 }
+

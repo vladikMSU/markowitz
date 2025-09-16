@@ -1,5 +1,6 @@
 using Markowitz.Core.Models;
 using Markowitz.Core.Services;
+using Markowitz.Core.Services.Optimizers;
 using Xunit;
 
 namespace Markowitz.Tests;
@@ -37,7 +38,7 @@ public class RealDataSmokeTests
             LookbackDays = 252 // например, последний год
         };
 
-        var opt = new MarkowitzOptimizer();
+        var opt = TestUtils.CreateOptimizer();
         var res = opt.Optimize(req);
 
         Assert.True(res.Weights.Count >= 2);
