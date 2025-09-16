@@ -3,11 +3,11 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Markowitz.Core", "Markowitz.Core\Markowitz.Core.csproj", "{E56E7DAD-A648-4694-A13F-E4E860592B5C}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Markowitz.Core", "src\\Markowitz.Core\\Markowitz.Core.csproj", "{E56E7DAD-A648-4694-A13F-E4E860592B5C}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Markowitz.Tests", "Markowitz.Tests\Markowitz.Tests.csproj", "{65E60732-9EDF-4F17-BE1C-BA11CB49171D}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Markowitz.Tests", "tests\\Markowitz.Tests\\Markowitz.Tests.csproj", "{65E60732-9EDF-4F17-BE1C-BA11CB49171D}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Markowitz.Web", "Markowitz.Web\Markowitz.Web.csproj", "{9581AD8D-7B9E-4879-BD5A-D35B77BAA107}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Markowitz.Web", "src\\Markowitz.Web\\Markowitz.Web.csproj", "{9581AD8D-7B9E-4879-BD5A-D35B77BAA107}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

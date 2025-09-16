@@ -45,7 +45,7 @@ public class IndexModel : PageModel
             var list = new List<Markowitz.Core.Models.PriceBar>();
             while (await csv.ReadAsync())
             {
-                var ts = csv.GetField<DateTime>("timestamp");
+                var ts = csv.GetField<DateTime>("Date");
                 var open = csv.GetField<decimal>("open");
                 var high = csv.GetField<decimal>("high");
                 var low  = csv.GetField<decimal>("low");
