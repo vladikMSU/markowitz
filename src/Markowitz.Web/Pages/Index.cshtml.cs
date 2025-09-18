@@ -23,6 +23,8 @@ public class IndexModel : PageModel
     [BindProperty] public DateTime? Start { get; set; }
     [BindProperty] public DateTime? End { get; set; }
     [BindProperty] public double? TargetReturnAnnualPercent { get; set; }
+    [BindProperty] public OptimizationTarget Target { get; set; } = OptimizationTarget.MinVolatility;
+    [BindProperty] public double? TargetVolatilityAnnualPercent { get; set; }
 
     [BindProperty] public OptimizationMethod Method { get; set; } = OptimizationMethod.QuadraticProgramming;
     [BindProperty] public bool AllowShort { get; set; }
@@ -142,8 +144,22 @@ public class IndexModel : PageModel
             .Where(a => a.Upper.HasValue)
             .ToDictionary(a => a.Ticker, a => a.Upper!.Value, StringComparer.OrdinalIgnoreCase);
 
-        if (Method == OptimizationMethod.ClosedForm && !AllowShort)
-            AllowShort = true;
+        if (Method != OptimizationMethod.QuadraticProgramming)
+        {
+            Target = OptimizationTarget.MinVolatility;
+            TargetVolatilityAnnualPercent = null;
+        }
+
+        if (Method == OptimizationMethod.QuadraticProgramming && Target == OptimizationTarget.TargetReturn && TargetReturnAnnualPercent is null)
+        {
+            ModelState.AddModelError(string.Empty, "Provide a target return percentage for the selected optimization target.");
+        }
+
+        if (!ModelState.IsValid)
+        {
+            Result = null;
+            return Page();
+        }
 
         var req = new OptimizationRequest
         {
@@ -151,11 +167,13 @@ public class IndexModel : PageModel
             Start = Start,
             End = End,
             TargetReturnAnnual = TargetReturnAnnualPercent / 100,
+            TargetVolatilityAnnual = TargetVolatilityAnnualPercent / 100,
+            RiskFreeAnnual = RiskFreeAnnual,
             Method = Method,
+            Target = Target,
             AllowShort = AllowShort,
             GlobalMinWeight = GlobalMin,
             GlobalMaxWeight = GlobalMax,
-            RiskFreeAnnual = RiskFreeAnnual,
             CvarAlpha = CvarAlpha,
             LowerBounds = lowerDict.Count > 0 ? lowerDict : null,
             UpperBounds = upperDict.Count > 0 ? upperDict : null,

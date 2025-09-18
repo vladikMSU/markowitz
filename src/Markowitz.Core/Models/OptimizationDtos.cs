@@ -1,12 +1,28 @@
-﻿namespace Markowitz.Core.Models;
+using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations;
+
+namespace Markowitz.Core.Models;
 
 public enum OptimizationMethod
 {
-    ClosedForm,
     QuadraticProgramming,
     CvarLinearProgramming,
     Conic,
     Heuristic
+}
+
+public enum OptimizationTarget
+{
+    [Display(Name = "Min volatility")]
+    MinVolatility,
+    [Display(Name = "Target return")]
+    TargetReturn,
+    [Display(Name = "Max return")]
+    MaxReturn,
+    [Display(Name = "Max Sharpe")]
+    MaxSharpe,
+    [Display(Name = "Max Sortino")]
+    MaxSortino
 }
 
 public class OptimizationRequest
@@ -18,6 +34,7 @@ public class OptimizationRequest
     public double? PeriodsPerYearOverride { get; init; }
 
     public double? TargetReturnAnnual { get; init; }
+    public double? TargetVolatilityAnnual { get; init; }
     public double RiskFreeAnnual { get; init; } = 0.0;
 
     public double? GlobalMinWeight { get; init; }
@@ -26,7 +43,8 @@ public class OptimizationRequest
     public Dictionary<string, double>? UpperBounds { get; init; }
     public bool AllowShort { get; init; } = false;
 
-    public OptimizationMethod Method { get; init; } = OptimizationMethod.ClosedForm;
+    public OptimizationMethod Method { get; init; } = OptimizationMethod.QuadraticProgramming;
+    public OptimizationTarget Target { get; init; } = OptimizationTarget.MinVolatility;
 
     public double? CvarAlpha { get; init; }
     public List<double[]>? ScenarioReturns { get; init; }
@@ -39,5 +57,6 @@ public class OptimizationResult
     public double VolatilityAnnual { get; init; }
     public int Observations { get; init; }
     public OptimizationMethod Method { get; init; }
+    public OptimizationTarget? Target { get; init; }
     public string? Notes { get; init; }
 }

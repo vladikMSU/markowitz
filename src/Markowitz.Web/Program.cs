@@ -12,7 +12,6 @@ builder.Services.AddDistributedMemoryCache();
 builder.Services.AddSession();
 
 builder.Services.AddSingleton<ReturnService>();
-builder.Services.AddSingleton<IPortfolioOptimizer, ClosedFormOptimizer>();
 builder.Services.AddSingleton<IPortfolioOptimizer, QpOptimizer>();
 builder.Services.AddSingleton<IPortfolioOptimizer, LpCvarOptimizer>();
 builder.Services.AddSingleton<IPortfolioOptimizer, HeuristicOptimizer>();

@@ -17,7 +17,8 @@ public static class TestUtils
             LookbackDays = lookbackDays,
             Start = start,
             End = end,
-            TargetReturnAnnual = target
+            TargetReturnAnnual = target,
+            Target = target.HasValue ? OptimizationTarget.TargetReturn : OptimizationTarget.MinVolatility
         };
 
     public static string SampleCsv(params (string Date, decimal Close, decimal High, decimal Low, decimal Open, long Volume)[] rows)
@@ -33,7 +34,6 @@ public static class TestUtils
     {
         IPortfolioOptimizer[] optimizers =
         {
-            new ClosedFormOptimizer(),
             new QpOptimizer(),
             new LpCvarOptimizer(),
             new HeuristicOptimizer()

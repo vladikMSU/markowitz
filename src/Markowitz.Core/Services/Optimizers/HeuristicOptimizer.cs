@@ -79,6 +79,7 @@ public class HeuristicOptimizer : IPortfolioOptimizer
         {
             Weights = weightDict,
             Method = Method,
+            Target = OptimizationTarget.MaxSortino,
             Notes = $"DE heuristic | Sortino ratio: {bestScore:F3}"
         };
     }

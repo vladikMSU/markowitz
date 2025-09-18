@@ -1,7 +1,9 @@
-﻿@page
+@page
 @model Markowitz.Web.Pages.IndexModel
+@using Microsoft.AspNetCore.Mvc.Rendering
 @{
     ViewData["Title"] = "Markowitz Optimizer";
+    var showTargetCard = Model.Method == Markowitz.Core.Models.OptimizationMethod.QuadraticProgramming;
 }
 
 <h1>Markowitz Optimizer (Pro)</h1>
@@ -77,6 +79,27 @@
         <div class="col-md-6">
           <label class="form-label">End date</label>
           <input type="date" class="form-control" asp-for="End" />
+        </div>
+      </div>
+      <div id="target-card-wrapper" class="mt-4 @(showTargetCard ? "" : "d-none")">
+        <div class="target-card border rounded-3 shadow-sm">
+          <button type="button" class="target-toggle" id="target-toggle" aria-expanded="false" aria-controls="target-content">
+            <span class="toggle-title">Optimization target</span>
+            <span class="chevron" aria-hidden="true"></span>
+          </button>
+          <div class="target-content" id="target-content" hidden>
+            <div class="row g-3">
+              <div class="col-md-6">
+                <label class="form-label">Optimization target</label>
+                <select class="form-select" asp-for="Target" id="target-select" asp-items="Html.GetEnumSelectList<Markowitz.Core.Models.OptimizationTarget>()"></select>
+              </div>
+              <div class="col-md-6">
+                <label class="form-label">Target volatility, % (annual, optional)</label>
+                <input type="number" step="0.0001" class="form-control" asp-for="TargetVolatilityAnnualPercent" id="target-volatility-input" />
+                <small class="form-text text-muted">Leave blank to skip the volatility cap.</small>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
       <div class="mb-3 mt-3">
@@ -163,6 +186,10 @@
   <h2>Result</h2>
   <p>
     <b>Method:</b> @Model.Result.Method<br />
+    @if (Model.Result.Target is Markowitz.Core.Models.OptimizationTarget objective)
+    {
+      <b>Objective:</b> @objective.GetDisplayName()<br />
+    }
     <b>Expected Return (annual):</b> @Model.Result.ExpectedReturnAnnual.ToString("P2")<br />
     <b>Volatility (annual):</b> @Model.Result.VolatilityAnnual.ToString("P2")<br />
     <b>Observations:</b> @Model.Result.Observations<br />
@@ -200,14 +227,16 @@
 
 
 <style>
-  .per-asset-card {
+  .per-asset-card,
+  .target-card {
     background-color: #ffffff;
     border-radius: 0.75rem;
     border: 1px solid rgba(0, 0, 0, 0.08);
     overflow: hidden;
   }
 
-  .per-asset-toggle {
+  .per-asset-toggle,
+  .target-toggle {
     width: 100%;
     padding: 0.9rem 1.25rem;
     border: 0;
@@ -223,22 +252,27 @@
   }
 
   .per-asset-toggle:hover,
-  .per-asset-toggle:focus-visible {
+  .per-asset-toggle:focus-visible,
+  .target-toggle:hover,
+  .target-toggle:focus-visible {
     background: linear-gradient(180deg, #e9ecef, #dee2e6);
   }
 
-  .per-asset-toggle:focus-visible {
+  .per-asset-toggle:focus-visible,
+  .target-toggle:focus-visible {
     outline: 0;
     box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
   }
 
-  .per-asset-toggle .toggle-title {
+  .per-asset-toggle .toggle-title,
+  .target-toggle .toggle-title {
     display: inline-flex;
     align-items: center;
     gap: 0.5rem;
   }
 
-  .per-asset-toggle .chevron {
+  .per-asset-toggle .chevron,
+  .target-toggle .chevron {
     display: inline-block;
     width: 0.65rem;
     height: 0.65rem;
@@ -248,27 +282,33 @@
     transition: transform 0.2s ease;
   }
 
-  .per-asset-toggle[aria-expanded="true"] .chevron {
+  .per-asset-toggle[aria-expanded="true"] .chevron,
+  .target-toggle[aria-expanded="true"] .chevron {
     transform: rotate(45deg);
   }
 
-  .per-asset-content {
+  .per-asset-content,
+  .target-content {
     display: none;
     padding: 1.25rem;
     background-color: #ffffff;
   }
 
-  .per-asset-content.active {
+  .per-asset-content.active,
+  .target-content.active {
     display: block;
   }
 
-  .per-asset-content .table {
+  .per-asset-content .table,
+  .target-content .table {
     margin-bottom: 0;
   }
 
   @@media (prefers-reduced-motion: reduce) {
     .per-asset-toggle,
-    .per-asset-content {
+    .target-toggle,
+    .per-asset-content,
+    .target-content {
       transition: none;
     }
   }
@@ -292,12 +332,51 @@
 
     const methodSelect = document.getElementById('method-select');
     const cvarOptions = document.getElementById('cvar-options');
+    const targetWrapper = document.getElementById('target-card-wrapper');
+    const targetToggle = document.getElementById('target-toggle');
+    const targetContent = document.getElementById('target-content');
+    const targetSelect = document.getElementById('target-select');
+    const targetVolInput = document.getElementById('target-volatility-input');
+
     const toggleCvar = () => {
       if (!methodSelect) return;
       cvarOptions.style.display = methodSelect.value === 'CvarLinearProgramming' ? '' : 'none';
     };
-    methodSelect?.addEventListener('change', toggleCvar);
+
+    const setTargetState = (isExpanded) => {
+      if (!targetToggle || !targetContent) return;
+      targetToggle.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
+      targetContent.classList.toggle('active', isExpanded);
+      targetContent.hidden = !isExpanded;
+    };
+
+    if (targetToggle && targetContent) {
+      setTargetState(false);
+      targetToggle.addEventListener('click', (event) => {
+        event.preventDefault();
+        const isExpanded = targetToggle.getAttribute('aria-expanded') === 'true';
+        setTargetState(!isExpanded);
+      });
+    }
+
+    const updateTargetVisibility = () => {
+      const isQuadratic = methodSelect && methodSelect.value === 'QuadraticProgramming';
+      if (targetWrapper) targetWrapper.classList.toggle('d-none', !isQuadratic);
+      if (targetSelect) {
+        targetSelect.disabled = !isQuadratic;
+        if (!isQuadratic) targetSelect.value = 'MinVolatility';
+      }
+      if (targetVolInput) targetVolInput.disabled = !isQuadratic;
+      if (!isQuadratic) setTargetState(false);
+    };
+
+    methodSelect?.addEventListener('change', () => {
+      toggleCvar();
+      updateTargetVisibility();
+    });
+
     toggleCvar();
+    updateTargetVisibility();
 
     const allowShortToggles = document.querySelectorAll('[data-allow-short-sync="true"]');
     if (allowShortToggles.length > 1) {

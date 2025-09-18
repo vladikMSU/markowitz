@@ -73,7 +73,7 @@ public class MarkowitzOptimizer
         else
             scenarios = (double[,])returnsMatrix.Clone();
 
-        var problem = new OptimizationProblem(
+        var baseProblem = new OptimizationProblem(
             tickers,
             muPeriod,
             sigmaPeriod,
@@ -90,19 +90,45 @@ public class MarkowitzOptimizer
         if (!_optimizers.TryGetValue(req.Method, out var optimizer))
             throw new InvalidOperationException($"Optimizer for method {req.Method} is not registered.");
 
-        if (!optimizer.Supports(problem))
-            throw new InvalidOperationException($"Optimizer {req.Method} does not support the provided problem configuration.");
+        Dictionary<string, double> rawWeights;
+        string? notes = null;
+        OptimizationTarget? appliedTarget = null;
 
-        var rawResult = optimizer.Optimize(problem);
-        if (rawResult.Weights == null || rawResult.Weights.Count == 0)
-            throw new InvalidOperationException("Optimizer returned empty weights.");
+        if (req.Method == OptimizationMethod.QuadraticProgramming)
+        {
+            var qpOutcome = OptimizeQuadratic(
+                optimizer,
+                baseProblem,
+                req,
+                muPeriod,
+                sigmaPeriod,
+                returnsMatrix,
+                riskFreePeriod,
+                req.RiskFreeAnnual,
+                periodsPerYear);
+            rawWeights = qpOutcome.Weights;
+            notes = qpOutcome.Notes;
+            appliedTarget = qpOutcome.Target;
+        }
+        else
+        {
+            if (!optimizer.Supports(baseProblem))
+                throw new InvalidOperationException($"Optimizer {req.Method} does not support the provided problem configuration.");
 
-        var normalized = NormalizeWeights(rawResult.Weights, tickers);
+            var rawResult = optimizer.Optimize(baseProblem);
+            if (rawResult.Weights == null || rawResult.Weights.Count == 0)
+                throw new InvalidOperationException("Optimizer returned empty weights.");
+
+            rawWeights = rawResult.Weights;
+            notes = rawResult.Notes;
+            appliedTarget = rawResult.Target ?? (req.Method == OptimizationMethod.Heuristic ? OptimizationTarget.MaxSortino : null);
+        }
+
+        var normalized = NormalizeWeights(rawWeights, tickers);
 
         var expectedPeriod = Dot(muPeriod, normalized);
         var variancePeriod = QuadraticForm(normalized, sigmaPeriod);
         var volatilityAnnual = Math.Sqrt(Math.Max(variancePeriod, 0)) * Math.Sqrt(periodsPerYear);
-
         var expectedReturnAnnual = expectedPeriod * periodsPerYear;
 
         return new OptimizationResult
@@ -112,8 +138,191 @@ public class MarkowitzOptimizer
             VolatilityAnnual = volatilityAnnual,
             Observations = nObs,
             Method = req.Method,
-            Notes = rawResult.Notes
+            Target = appliedTarget ?? req.Target,
+            Notes = notes
         };
+    }
+
+    private (Dictionary<string, double> Weights, string? Notes, OptimizationTarget Target) OptimizeQuadratic(
+        IPortfolioOptimizer optimizer,
+        OptimizationProblem baseProblem,
+        OptimizationRequest req,
+        double[] muPeriod,
+        double[,] sigmaPeriod,
+        double[,] returnsMatrix,
+        double riskFreePeriod,
+        double riskFreeAnnual,
+        double periodsPerYear)
+    {
+        if (!optimizer.Supports(baseProblem with { TargetReturn = null }))
+            throw new InvalidOperationException($"Optimizer {req.Method} does not support the provided problem configuration.");
+
+        double? targetReturnPeriod = baseProblem.TargetReturn;
+        double? volatilityCapAnnual = req.TargetVolatilityAnnual;
+        var objective = req.Target;
+        if (objective == OptimizationTarget.MinVolatility && targetReturnPeriod is double)
+            objective = OptimizationTarget.TargetReturn;
+
+        PortfolioCandidate? SolveCandidate(double? targetReturn)
+        {
+            var problem = baseProblem with { TargetReturn = targetReturn };
+            try
+            {
+                var raw = optimizer.Optimize(problem);
+                if (raw.Weights == null || raw.Weights.Count == 0)
+                    return null;
+
+                var normalized = NormalizeWeights(raw.Weights, baseProblem.Tickers);
+                var expectedPeriod = Dot(muPeriod, normalized);
+                var expectedAnnual = expectedPeriod * periodsPerYear;
+                var variancePeriod = QuadraticForm(normalized, sigmaPeriod);
+                var volatilityAnnual = Math.Sqrt(Math.Max(variancePeriod, 0)) * Math.Sqrt(periodsPerYear);
+                var sharpe = ComputeSharpe(expectedAnnual, riskFreeAnnual, volatilityAnnual);
+                var sortino = ComputeSortino(normalized, returnsMatrix, riskFreePeriod, periodsPerYear, expectedPeriod);
+                var dict = BuildWeightDictionary(baseProblem.Tickers, normalized);
+                return new PortfolioCandidate(dict, raw.Notes, expectedAnnual, volatilityAnnual, sharpe, sortino, targetReturn);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        PortfolioCandidate RequireCandidate(double? targetReturn, string failureMessage)
+        {
+            var candidate = SolveCandidate(targetReturn);
+            if (candidate is null)
+                throw new InvalidOperationException(failureMessage);
+
+            if (volatilityCapAnnual is double maxVol && candidate.VolatilityAnnual > maxVol + 1e-9)
+                throw new InvalidOperationException("No feasible portfolio satisfies the requested volatility ceiling.");
+
+            return candidate;
+        }
+
+        PortfolioCandidate SelectBy(Func<PortfolioCandidate, double> scoreSelector)
+        {
+            PortfolioCandidate? best = null;
+            double bestScore = double.NegativeInfinity;
+
+            void Consider(PortfolioCandidate? candidate)
+            {
+                if (candidate is null)
+                    return;
+                if (volatilityCapAnnual is double maxVol && candidate.VolatilityAnnual > maxVol + 1e-9)
+                    return;
+
+                double score = scoreSelector(candidate);
+                if (!double.IsFinite(score))
+                    return;
+
+                if (best is null || score > bestScore + 1e-12)
+                {
+                    best = candidate;
+                    bestScore = score;
+                }
+                else if (best is not null && Math.Abs(score - bestScore) <= 1e-12 && candidate.VolatilityAnnual < best.VolatilityAnnual)
+                {
+                    best = candidate;
+                }
+            }
+
+            Consider(SolveCandidate(null));
+
+            foreach (var gridTarget in BuildTargetReturnGrid(muPeriod, targetReturnPeriod))
+                Consider(SolveCandidate(gridTarget));
+
+            if (best is null)
+                throw new InvalidOperationException("Quadratic solver could not produce a feasible portfolio for the requested objective.");
+
+            return best;
+        }
+
+        switch (objective)
+        {
+            case OptimizationTarget.MinVolatility:
+            {
+                var candidate = RequireCandidate(null, "Quadratic solver failed to compute the global minimum variance portfolio.");
+                return (candidate.Weights, ComposeNotes(candidate, periodsPerYear), objective);
+            }
+
+            case OptimizationTarget.TargetReturn:
+            {
+                if (targetReturnPeriod is null)
+                    throw new InvalidOperationException("Provide a target return to use the 'TargetReturn' objective.");
+                var candidate = RequireCandidate(targetReturnPeriod, "Quadratic solver could not find a portfolio for the requested target return.");
+                return (candidate.Weights, ComposeNotes(candidate, periodsPerYear), objective);
+            }
+
+            case OptimizationTarget.MaxReturn:
+            {
+                var candidate = SelectBy(c => c.ExpectedAnnual);
+                return (candidate.Weights, ComposeNotes(candidate, periodsPerYear), objective);
+            }
+
+            case OptimizationTarget.MaxSharpe:
+            {
+                var candidate = SelectBy(c => c.Sharpe);
+                return (candidate.Weights, ComposeNotes(candidate, periodsPerYear), objective);
+            }
+
+            case OptimizationTarget.MaxSortino:
+            {
+                var candidate = SelectBy(c => c.Sortino);
+                return (candidate.Weights, ComposeNotes(candidate, periodsPerYear), objective);
+            }
+
+            default:
+            {
+                var candidate = RequireCandidate(null, "Quadratic solver failed to compute the global minimum variance portfolio.");
+                return (candidate.Weights, ComposeNotes(candidate, periodsPerYear), objective);
+            }
+        }
+    }
+
+    private static IEnumerable<double> BuildTargetReturnGrid(double[] muPeriod, double? explicitTarget)
+    {
+        if (muPeriod.Length == 0)
+            yield break;
+
+        var set = new SortedSet<double>();
+        double min = muPeriod.Min();
+        double max = muPeriod.Max();
+        double span = max - min;
+        double buffer = span * 0.25;
+        if (buffer < 1e-4)
+            buffer = Math.Max(Math.Abs(min), Math.Abs(max)) * 0.25 + 1e-4;
+
+        double low = min - buffer;
+        double high = max + buffer;
+        const int steps = 21;
+
+        for (int i = 0; i < steps; i++)
+        {
+            double value = steps == 1 ? low : low + (high - low) * i / (steps - 1);
+            set.Add(value);
+        }
+
+        foreach (var mu in muPeriod)
+            set.Add(mu);
+
+        if (explicitTarget is double t)
+            set.Add(t);
+
+        foreach (var value in set)
+            yield return value;
+    }
+
+    private static string? ComposeNotes(PortfolioCandidate candidate, double periodsPerYear)
+    {
+        if (candidate.TargetReturnPeriod is double targetPeriod)
+        {
+            double targetAnnual = targetPeriod * periodsPerYear;
+            string addition = $"Target return constraint: {targetAnnual:P2}";
+            return string.IsNullOrWhiteSpace(candidate.Notes) ? addition : $"{candidate.Notes}; {addition}";
+        }
+
+        return candidate.Notes;
     }
 
     private static void ApplyRidgeRegularization(double[,] sigma, double ridge)
@@ -131,11 +340,8 @@ public class MarkowitzOptimizer
         var upperDict = req.UpperBounds ?? new Dictionary<string, double>();
 
         bool hasCustomBounds = globalMin.HasValue || globalMax.HasValue || lowerDict.Count > 0 || upperDict.Count > 0;
-        if (req.Method == OptimizationMethod.ClosedForm && hasCustomBounds)
-            throw new InvalidOperationException("Closed-form optimizer does not support bounds. Choose 'QuadraticProgramming' or another supported solver.");
-
-        bool allowShort = req.AllowShort || req.Method == OptimizationMethod.ClosedForm;
-        bool enforceLongOnly = !allowShort && req.Method != OptimizationMethod.ClosedForm;
+        bool allowShort = req.AllowShort;
+        bool enforceLongOnly = !allowShort;
 
         if (!hasCustomBounds && !enforceLongOnly)
             return (null, null);
@@ -232,5 +438,52 @@ public class MarkowitzOptimizer
         return annualRate / periodsPerYear;
     }
 
-}
+    private static double ComputeSharpe(double expectedAnnual, double riskFreeAnnual, double volatilityAnnual)
+    {
+        double numerator = expectedAnnual - riskFreeAnnual;
+        if (volatilityAnnual < 1e-12)
+            return numerator > 0 ? double.PositiveInfinity : double.NegativeInfinity;
+        return numerator / volatilityAnnual;
+    }
 
+    private static double ComputeSortino(double[] weights, double[,] returnsMatrix, double riskFreePeriod, double periodsPerYear, double expectedPeriod)
+    {
+        double downside = ComputeDownsideDeviation(weights, returnsMatrix, riskFreePeriod);
+        if (downside < 1e-12)
+            return expectedPeriod > riskFreePeriod ? double.PositiveInfinity : double.NegativeInfinity;
+
+        double periodRatio = (expectedPeriod - riskFreePeriod) / downside;
+        return periodRatio * Math.Sqrt(periodsPerYear);
+    }
+
+    private static double ComputeDownsideDeviation(double[] weights, double[,] returnsMatrix, double riskFreePeriod)
+    {
+        int rows = returnsMatrix.GetLength(0);
+        int cols = returnsMatrix.GetLength(1);
+
+        if (rows == 0 || cols == 0)
+            return 0.0;
+
+        double sumSquares = 0.0;
+        for (int i = 0; i < rows; i++)
+        {
+            double ret = 0.0;
+            for (int j = 0; j < cols; j++)
+                ret += returnsMatrix[i, j] * weights[j];
+
+            double downside = Math.Min(0.0, ret - riskFreePeriod);
+            sumSquares += downside * downside;
+        }
+
+        return Math.Sqrt(sumSquares / rows);
+    }
+
+    private sealed record PortfolioCandidate(
+        Dictionary<string, double> Weights,
+        string? Notes,
+        double ExpectedAnnual,
+        double VolatilityAnnual,
+        double Sharpe,
+        double Sortino,
+        double? TargetReturnPeriod);
+}
