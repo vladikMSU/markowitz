@@ -85,10 +85,8 @@ public class RealDataSmokeTests
                 $"Weight mismatch for {ticker}");
         }
 
-        var portfolioSeries = BuildPortfolioSeries(manual.ReturnsMatrix, expectedWeights);
         var expectedPeriodReturn = Dot(moments.MuPeriod, expectedWeights);
-        var fallback = expectedPeriodReturn * manual.PeriodsPerYear;
-        var expectedAnnualReturn = AnnualizeFromSeries(portfolioSeries, manual.PeriodsPerYear, fallback);
+        var expectedAnnualReturn = expectedPeriodReturn * manual.PeriodsPerYear;
         var expectedVariancePeriod = QuadraticForm(expectedWeights, moments.SigmaPeriod);
         var expectedVolatilityAnnual = Math.Sqrt(Math.Max(expectedVariancePeriod, 0)) * Math.Sqrt(manual.PeriodsPerYear);
 
@@ -322,41 +320,6 @@ public class RealDataSmokeTests
         return sum;
     }
 
-    private static double[] BuildPortfolioSeries(double[,] returnsMatrix, double[] weights)
-    {
-        int observations = returnsMatrix.GetLength(0);
-        int assets = returnsMatrix.GetLength(1);
-        var series = new double[observations];
-        for (int t = 0; t < observations; t++)
-        {
-            double value = 0.0;
-            for (int j = 0; j < assets; j++)
-                value += returnsMatrix[t, j] * weights[j];
-            series[t] = value;
-        }
-        return series;
-    }
-
-    private static double AnnualizeFromSeries(double[] returns, double periodsPerYear, double fallbackArithmetic)
-    {
-        if (returns.Length == 0)
-            return 0.0;
-
-        double logSum = 0.0;
-        for (int i = 0; i < returns.Length; i++)
-        {
-            double factor = 1.0 + returns[i];
-            if (factor <= 0)
-                return fallbackArithmetic;
-            logSum += Math.Log(factor);
-        }
-
-        double avgLog = logSum / returns.Length;
-        double annualized = Math.Exp(avgLog * periodsPerYear) - 1.0;
-        if (!double.IsFinite(annualized))
-            return fallbackArithmetic;
-        return annualized;
-    }
 
     private static void AssertMatrixAlmostEqual(double[,] expected, double[,] actual, double tolerance)
     {

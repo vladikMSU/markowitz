@@ -1,4 +1,4 @@
-using Markowitz.Core.Services;
+﻿using Markowitz.Core.Services;
 using Markowitz.Core.Services.Optimizers;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -7,6 +7,9 @@ builder.Services.AddRazorPages()
     .AddRazorRuntimeCompilation()
 #endif
     ;
+
+builder.Services.AddDistributedMemoryCache();
+builder.Services.AddSession();
 
 builder.Services.AddSingleton<ReturnService>();
 builder.Services.AddSingleton<IPortfolioOptimizer, ClosedFormOptimizer>();
@@ -23,5 +26,6 @@ if (!app.Environment.IsDevelopment())
 }
 app.UseStaticFiles();
 app.UseRouting();
+app.UseSession();
 app.MapRazorPages();
 app.Run();

@@ -1,9 +1,11 @@
-using CsvHelper;
+﻿using CsvHelper;
 using Markowitz.Core.Models;
 using Markowitz.Core.Services;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using System.Globalization;
+using System.Text.Json;
 using System.Linq;
 
 namespace Markowitz.Web.Pages;
@@ -11,15 +13,16 @@ namespace Markowitz.Web.Pages;
 public class IndexModel : PageModel
 {
     private readonly MarkowitzOptimizer _optimizer;
+    private const string UploadSessionKey = "uploaded-files";
+    private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
     public IndexModel(MarkowitzOptimizer optimizer) => _optimizer = optimizer;
 
     [BindProperty] public List<IFormFile> Files { get; set; } = new();
 
-    [BindProperty] public int? LookbackDays { get; set; } = 252;
     [BindProperty] public DateTime? Start { get; set; }
     [BindProperty] public DateTime? End { get; set; }
-    [BindProperty] public double? TargetReturnAnnual { get; set; }
+    [BindProperty] public double? TargetReturnAnnualPercent { get; set; }
 
     [BindProperty] public OptimizationMethod Method { get; set; } = OptimizationMethod.QuadraticProgramming;
     [BindProperty] public bool AllowShort { get; set; }
@@ -31,96 +34,92 @@ public class IndexModel : PageModel
     [BindProperty] public List<AssetConstraintInput> AssetBounds { get; set; } = new();
 
     public OptimizationResult? Result { get; set; }
+    public List<string> UploadedFileNames { get; private set; } = new();
 
-    public void OnGet() { }
+    public void OnGet()
+    {
+        var uploads = LoadStoredUploads();
+        UploadedFileNames = uploads.Select(u => u.FileName).ToList();
+        if (uploads.Count > 0)
+        {
+            var tickers = uploads.Select(u => u.Ticker)
+                .OrderBy(t => t, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            SyncAssetBounds(tickers);
+        }
+    }
 
     public async Task<IActionResult> OnPostAsync()
     {
-        if (Files.Count == 0)
+        var uploads = LoadStoredUploads();
+        UploadedFileNames = uploads.Select(u => u.FileName).ToList();
+
+        var action = Request.Form["action"].FirstOrDefault();
+        var isUploadOnly = string.Equals(action, "upload", StringComparison.OrdinalIgnoreCase);
+        var removeTarget = Request.Form["removeFile"].FirstOrDefault();
+        if (!string.IsNullOrWhiteSpace(removeTarget))
         {
-            ModelState.AddModelError(string.Empty, "Upload at least one CSV.");
+            if (uploads.RemoveAll(u => string.Equals(u.FileName, removeTarget, StringComparison.OrdinalIgnoreCase)) > 0)
+                SaveStoredUploads(uploads);
+
+            UploadedFileNames = uploads.Select(u => u.FileName).ToList();
+            var remainingTickers = uploads.Select(u => u.Ticker)
+                .OrderBy(t => t, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            SyncAssetBounds(remainingTickers);
+            Result = null;
             return Page();
         }
 
-        var dict = new Dictionary<string, List<PriceBar>>(StringComparer.OrdinalIgnoreCase);
-        foreach (var file in Files)
+        if (Files.Count > 0)
         {
-            if (file.Length == 0)
+            foreach (var file in Files)
             {
-                continue;
-            }
-
-            var ticker = Path.GetFileNameWithoutExtension(file.FileName).Trim();
-            if (string.IsNullOrWhiteSpace(ticker))
-            {
-                ModelState.AddModelError(string.Empty, "Ticker name could not be derived from file name.");
-                return Page();
-            }
-
-            using var stream = file.OpenReadStream();
-            using var reader = new StreamReader(stream);
-            using var csv = new CsvReader(reader, CultureInfo.InvariantCulture);
-
-            if (!await csv.ReadAsync())
-            {
-                continue;
-            }
-            csv.ReadHeader();
-
-            var header = csv.HeaderRecord ?? Array.Empty<string>();
-            var columnLookup = header
-                .Select((name, index) => new { name, index })
-                .Where(x => !string.IsNullOrWhiteSpace(x.name))
-                .ToDictionary(x => x.name.Trim(), x => x.index, StringComparer.OrdinalIgnoreCase);
-
-            int GetColumnIndex(string column)
-            {
-                if (!columnLookup.TryGetValue(column, out var index))
-                    throw new InvalidOperationException($"File '{file.FileName}' is missing required column '{column}'.");
-                return index;
-            }
-
-            int dateIndex = GetColumnIndex("Date");
-            int openIndex = GetColumnIndex("Open");
-            int highIndex = GetColumnIndex("High");
-            int lowIndex = GetColumnIndex("Low");
-            int closeIndex = GetColumnIndex("Close");
-
-            var prices = new List<PriceBar>();
-            while (await csv.ReadAsync())
-            {
-                try
+                var (upload, error) = await ParseUploadedFileAsync(file);
+                if (error is not null)
                 {
-                    var ts = csv.GetField<DateTime>(dateIndex);
-                    var open = csv.GetField<decimal>(openIndex);
-                    var high = csv.GetField<decimal>(highIndex);
-                    var low = csv.GetField<decimal>(lowIndex);
-                    var close = csv.GetField<decimal>(closeIndex);
-                    prices.Add(new PriceBar(ts, open, high, low, close));
+                    ModelState.AddModelError(string.Empty, error);
+                    UploadedFileNames = uploads.Select(u => u.FileName).ToList();
+                    var tickers = uploads.Select(u => u.Ticker)
+                        .OrderBy(t => t, StringComparer.OrdinalIgnoreCase)
+                        .ToArray();
+                    SyncAssetBounds(tickers);
+                    return Page();
                 }
-                catch (Exception ex)
-                {
-                    throw new InvalidOperationException($"Failed to parse record in file '{file.FileName}': {ex.Message}", ex);
-                }
-            }
+                if (upload is null)
+                    continue;
 
-            if (prices.Count == 0)
-            {
-                ModelState.AddModelError(string.Empty, $"File '{file.FileName}' does not contain price rows.");
-                return Page();
+                uploads.RemoveAll(u => string.Equals(u.FileName, upload.FileName, StringComparison.OrdinalIgnoreCase));
+                uploads.RemoveAll(u => string.Equals(u.Ticker, upload.Ticker, StringComparison.OrdinalIgnoreCase));
+                uploads.Add(upload);
             }
-
-            dict[ticker] = prices;
+            SaveStoredUploads(uploads);
         }
+
+        UploadedFileNames = uploads.Select(u => u.FileName).ToList();
+
+        var dict = new Dictionary<string, List<PriceBar>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var upload in uploads)
+            dict[upload.Ticker] = upload.Bars;
 
         if (dict.Count == 0)
         {
-            ModelState.AddModelError(string.Empty, "No valid CSV data found.");
+            ModelState.AddModelError(string.Empty, "Upload at least one CSV.");
+            SyncAssetBounds(Array.Empty<string>());
+            Result = null;
             return Page();
         }
 
-        var orderedTickers = dict.Keys.OrderBy(t => t, StringComparer.OrdinalIgnoreCase).ToArray();
+        var orderedTickers = dict.Keys
+            .OrderBy(t => t, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
         SyncAssetBounds(orderedTickers);
+
+        if (isUploadOnly)
+        {
+            Result = null;
+            return Page();
+        }
 
         List<double[]>? scenarioData = null;
         if (ScenarioFile is { Length: > 0 })
@@ -149,10 +148,9 @@ public class IndexModel : PageModel
         var req = new OptimizationRequest
         {
             PricesByTicker = dict,
-            LookbackDays = LookbackDays,
             Start = Start,
             End = End,
-            TargetReturnAnnual = TargetReturnAnnual,
+            TargetReturnAnnual = TargetReturnAnnualPercent / 100,
             Method = Method,
             AllowShort = AllowShort,
             GlobalMinWeight = GlobalMin,
@@ -174,6 +172,108 @@ public class IndexModel : PageModel
         }
 
         return Page();
+    }
+
+    private async Task<(StoredUpload? Upload, string? Error)> ParseUploadedFileAsync(IFormFile file)
+    {
+        if (file is null || file.Length == 0)
+            return (null, $"File '{file?.FileName ?? "unknown"}' does not contain price rows.");
+
+        var ticker = Path.GetFileNameWithoutExtension(file.FileName).Trim();
+        if (string.IsNullOrWhiteSpace(ticker))
+            return (null, "Ticker name could not be derived from file name.");
+
+        using var stream = file.OpenReadStream();
+        using var reader = new StreamReader(stream);
+        using var csv = new CsvReader(reader, CultureInfo.InvariantCulture);
+
+        if (!await csv.ReadAsync())
+            return (null, $"File '{file.FileName}' does not contain price rows.");
+        csv.ReadHeader();
+
+        var header = csv.HeaderRecord ?? Array.Empty<string>();
+        var columnLookup = header
+            .Select((name, index) => new { name, index })
+            .Where(x => !string.IsNullOrWhiteSpace(x.name))
+            .ToDictionary(x => x.name.Trim(), x => x.index, StringComparer.OrdinalIgnoreCase);
+
+        int GetColumnIndex(string column)
+        {
+            if (!columnLookup.TryGetValue(column, out var index))
+                throw new InvalidOperationException($"File '{file.FileName}' is missing required column '{column}'.");
+            return index;
+        }
+
+        try
+        {
+            int dateIndex = GetColumnIndex("Date");
+            int openIndex = GetColumnIndex("Open");
+            int highIndex = GetColumnIndex("High");
+            int lowIndex = GetColumnIndex("Low");
+            int closeIndex = GetColumnIndex("Close");
+
+            var prices = new List<PriceBar>();
+            while (await csv.ReadAsync())
+            {
+                try
+                {
+                    var ts = csv.GetField<DateTime>(dateIndex);
+                    var open = csv.GetField<decimal>(openIndex);
+                    var high = csv.GetField<decimal>(highIndex);
+                    var low = csv.GetField<decimal>(lowIndex);
+                    var close = csv.GetField<decimal>(closeIndex);
+                    prices.Add(new PriceBar(ts, open, high, low, close));
+                }
+                catch (Exception ex)
+                {
+                    return (null, $"Failed to parse record in file '{file.FileName}': {ex.Message}");
+                }
+            }
+
+            if (prices.Count == 0)
+                return (null, $"File '{file.FileName}' does not contain price rows.");
+
+            var upload = new StoredUpload
+            {
+                FileName = file.FileName,
+                Ticker = ticker,
+                Bars = prices
+            };
+            return (upload, null);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return (null, ex.Message);
+        }
+    }
+
+    private List<StoredUpload> LoadStoredUploads()
+    {
+        var json = HttpContext.Session.GetString(UploadSessionKey);
+        if (string.IsNullOrEmpty(json))
+            return new List<StoredUpload>();
+
+        try
+        {
+            return JsonSerializer.Deserialize<List<StoredUpload>>(json, JsonOptions) ?? new List<StoredUpload>();
+        }
+        catch
+        {
+            HttpContext.Session.Remove(UploadSessionKey);
+            return new List<StoredUpload>();
+        }
+    }
+
+    private void SaveStoredUploads(List<StoredUpload> uploads)
+    {
+        if (uploads.Count == 0)
+        {
+            HttpContext.Session.Remove(UploadSessionKey);
+            return;
+        }
+
+        var json = JsonSerializer.Serialize(uploads, JsonOptions);
+        HttpContext.Session.SetString(UploadSessionKey, json);
     }
 
     private void SyncAssetBounds(string[] tickers)
@@ -223,6 +323,13 @@ public class IndexModel : PageModel
             throw new InvalidOperationException("Scenario file does not contain any scenarios.");
 
         return rows;
+    }
+
+    private sealed class StoredUpload
+    {
+        public string FileName { get; set; } = string.Empty;
+        public string Ticker { get; set; } = string.Empty;
+        public List<PriceBar> Bars { get; set; } = new();
     }
 
     public class AssetConstraintInput

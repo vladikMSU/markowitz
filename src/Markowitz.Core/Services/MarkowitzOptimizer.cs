@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Markowitz.Core.Models;
@@ -103,8 +103,7 @@ public class MarkowitzOptimizer
         var variancePeriod = QuadraticForm(normalized, sigmaPeriod);
         var volatilityAnnual = Math.Sqrt(Math.Max(variancePeriod, 0)) * Math.Sqrt(periodsPerYear);
 
-        var portfolioSeries = BuildPortfolioSeries(returnsMatrix, normalized);
-        var expectedReturnAnnual = AnnualizeFromSeries(portfolioSeries, periodsPerYear, expectedPeriod * periodsPerYear);
+        var expectedReturnAnnual = expectedPeriod * periodsPerYear;
 
         return new OptimizationResult
         {
@@ -230,50 +229,8 @@ public class MarkowitzOptimizer
         if (periodsPerYear <= 0)
             throw new InvalidOperationException("Periods per year must be positive.");
 
-        if (Math.Abs(annualRate) < 1e-12)
-            return 0;
-
-        double baseValue = 1.0 + annualRate;
-        if (baseValue <= 0)
-            throw new InvalidOperationException("Annual rate must be greater than -100%.");
-
-        return Math.Pow(baseValue, 1.0 / periodsPerYear) - 1.0;
+        return annualRate / periodsPerYear;
     }
 
-    private static double[] BuildPortfolioSeries(double[,] returnsMatrix, double[] weights)
-    {
-        int nObs = returnsMatrix.GetLength(0);
-        int assets = returnsMatrix.GetLength(1);
-        var series = new double[nObs];
-        for (int t = 0; t < nObs; t++)
-        {
-            double value = 0.0;
-            for (int j = 0; j < assets; j++)
-                value += returnsMatrix[t, j] * weights[j];
-            series[t] = value;
-        }
-        return series;
-    }
-
-    private static double AnnualizeFromSeries(double[] returns, double periodsPerYear, double fallbackArithmetic)
-    {
-        if (returns.Length == 0)
-            return 0.0;
-
-        double logSum = 0.0;
-        for (int i = 0; i < returns.Length; i++)
-        {
-            double factor = 1.0 + returns[i];
-            if (factor <= 0)
-                return fallbackArithmetic;
-            logSum += Math.Log(factor);
-        }
-
-        double avgLog = logSum / returns.Length;
-        double annualized = Math.Exp(avgLog * periodsPerYear) - 1.0;
-        if (!double.IsFinite(annualized))
-            return fallbackArithmetic;
-        return annualized;
-    }
 }
 
