@@ -26,6 +26,10 @@
 
   <div class="tab-content border border-top-0 p-3">
     <div class="tab-pane fade show active" id="basic-tab" role="tabpanel" aria-labelledby="basic-tab-btn">
+      <div class="form-check mb-3">
+        <input class="form-check-input" type="checkbox" asp-for="AllowShort" id="allow-short-basic">
+        <label class="form-check-label" for="allow-short-basic">Allow short selling</label>
+      </div>
       <div class="row g-3">
         <div class="col-md-4">
           <label class="form-label">Lookback (days)</label>
@@ -48,6 +52,10 @@
     </div>
 
     <div class="tab-pane fade" id="pro-tab" role="tabpanel" aria-labelledby="pro-tab-btn">
+      <div class="form-check mb-3">
+        <input class="form-check-input" type="checkbox" asp-for="AllowShort" id="allow-short-pro">
+        <label class="form-check-label" for="allow-short-pro">Allow short selling</label>
+      </div>
       <div class="mb-3">
         <label class="form-label">Optimization method</label>
         <select class="form-select" asp-for="Method" id="method-select">
@@ -56,10 +64,6 @@
             <option value="@method">@method</option>
           }
         </select>
-      </div>
-      <div class="form-check mb-3">
-        <input class="form-check-input" type="checkbox" asp-for="AllowShort" id="allow-short">
-        <label class="form-check-label" for="allow-short">Allow short selling (where supported)</label>
       </div>
       <div class="row g-3">
         <div class="col-md-4">
@@ -191,5 +195,3 @@
     toggleCvar();
   });
 </script>
-
-

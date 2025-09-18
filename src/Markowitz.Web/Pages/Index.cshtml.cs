@@ -21,7 +21,7 @@ public class IndexModel : PageModel
     [BindProperty] public DateTime? End { get; set; }
     [BindProperty] public double? TargetReturnAnnual { get; set; }
 
-    [BindProperty] public OptimizationMethod Method { get; set; } = OptimizationMethod.ClosedForm;
+    [BindProperty] public OptimizationMethod Method { get; set; } = OptimizationMethod.QuadraticProgramming;
     [BindProperty] public bool AllowShort { get; set; }
     [BindProperty] public double? GlobalMin { get; set; }
     [BindProperty] public double? GlobalMax { get; set; }
@@ -142,6 +142,9 @@ public class IndexModel : PageModel
         var upperDict = AssetBounds
             .Where(a => a.Upper.HasValue)
             .ToDictionary(a => a.Ticker, a => a.Upper!.Value, StringComparer.OrdinalIgnoreCase);
+
+        if (Method == OptimizationMethod.ClosedForm && !AllowShort)
+            AllowShort = true;
 
         var req = new OptimizationRequest
         {
