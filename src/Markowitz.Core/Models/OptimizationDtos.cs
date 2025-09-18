@@ -1,4 +1,4 @@
-namespace Markowitz.Core.Models;
+﻿namespace Markowitz.Core.Models;
 
 public enum OptimizationMethod
 {
@@ -15,6 +15,7 @@ public class OptimizationRequest
     public int? LookbackDays { get; init; }
     public DateTime? Start { get; init; }
     public DateTime? End { get; init; }
+    public double? PeriodsPerYearOverride { get; init; }
 
     public double? TargetReturnAnnual { get; init; }
     public double RiskFreeAnnual { get; init; } = 0.0;

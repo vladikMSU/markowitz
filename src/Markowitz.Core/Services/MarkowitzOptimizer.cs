@@ -1,3 +1,6 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
 using Markowitz.Core.Models;
 using Markowitz.Core.Services.Optimizers;
 
@@ -18,21 +21,26 @@ public class MarkowitzOptimizer
 
     public OptimizationResult Optimize(OptimizationRequest req)
     {
-        var (tickers, returnsMatrix, nObs, _) = _returnService.BuildAlignedLogReturns(req);
+        var returnData = _returnService.BuildAlignedReturns(req);
+        var tickers = returnData.Tickers;
+        var returnsMatrix = returnData.Returns;
+        var periodsPerYear = returnData.PeriodsPerYear;
+        var nObs = returnsMatrix.GetLength(0);
+
         if (nObs < 2)
             throw new InvalidOperationException("Not enough observations.");
 
         int n = tickers.Length;
-        var muDaily = new double[n];
+        var muPeriod = new double[n];
         for (int j = 0; j < n; j++)
         {
             double sum = 0;
             for (int t = 0; t < nObs; t++)
                 sum += returnsMatrix[t, j];
-            muDaily[j] = sum / nObs;
+            muPeriod[j] = sum / nObs;
         }
 
-        var sigmaDaily = new double[n, n];
+        var sigmaPeriod = new double[n, n];
         for (int i = 0; i < n; i++)
         {
             for (int j = i; j < n; j++)
@@ -40,29 +48,22 @@ public class MarkowitzOptimizer
                 double cov = 0;
                 for (int t = 0; t < nObs; t++)
                 {
-                    double di = returnsMatrix[t, i] - muDaily[i];
-                    double dj = returnsMatrix[t, j] - muDaily[j];
+                    double di = returnsMatrix[t, i] - muPeriod[i];
+                    double dj = returnsMatrix[t, j] - muPeriod[j];
                     cov += di * dj;
                 }
                 cov /= (nObs - 1);
-                sigmaDaily[i, j] = cov;
-                sigmaDaily[j, i] = cov;
+                sigmaPeriod[i, j] = cov;
+                sigmaPeriod[j, i] = cov;
             }
         }
 
-        const double annualizationFactor = 252.0;
-        var muAnnual = new double[n];
-        for (int j = 0; j < n; j++)
-            muAnnual[j] = muDaily[j] * annualizationFactor;
+        ApplyRidgeRegularization(sigmaPeriod, 1e-8);
 
-        var sigmaAnnual = new double[n, n];
-        for (int i = 0; i < n; i++)
-        {
-            for (int j = 0; j < n; j++)
-                sigmaAnnual[i, j] = sigmaDaily[i, j] * annualizationFactor;
-        }
-
-        ApplyRidgeRegularization(sigmaAnnual, 1e-8);
+        double riskFreePeriod = ConvertAnnualToPeriodic(req.RiskFreeAnnual, periodsPerYear);
+        double? targetReturnPeriod = req.TargetReturnAnnual is double targetAnnual
+            ? ConvertAnnualToPeriodic(targetAnnual, periodsPerYear)
+            : null;
 
         var (lb, ub) = BuildBounds(req, tickers);
 
@@ -74,16 +75,17 @@ public class MarkowitzOptimizer
 
         var problem = new OptimizationProblem(
             tickers,
-            muAnnual,
-            sigmaAnnual,
-            req.TargetReturnAnnual,
-            req.RiskFreeAnnual,
+            muPeriod,
+            sigmaPeriod,
+            targetReturnPeriod,
+            riskFreePeriod,
             lb,
             ub,
             req.AllowShort,
             scenarios,
             req.CvarAlpha ?? 0.95,
-            req.Method);
+            req.Method,
+            periodsPerYear);
 
         if (!_optimizers.TryGetValue(req.Method, out var optimizer))
             throw new InvalidOperationException($"Optimizer for method {req.Method} is not registered.");
@@ -97,15 +99,18 @@ public class MarkowitzOptimizer
 
         var normalized = NormalizeWeights(rawResult.Weights, tickers);
 
-        var expectedReturn = Dot(muAnnual, normalized);
-        var variance = QuadraticForm(normalized, sigmaAnnual);
-        var volatility = Math.Sqrt(Math.Max(variance, 0));
+        var expectedPeriod = Dot(muPeriod, normalized);
+        var variancePeriod = QuadraticForm(normalized, sigmaPeriod);
+        var volatilityAnnual = Math.Sqrt(Math.Max(variancePeriod, 0)) * Math.Sqrt(periodsPerYear);
+
+        var portfolioSeries = BuildPortfolioSeries(returnsMatrix, normalized);
+        var expectedReturnAnnual = AnnualizeFromSeries(portfolioSeries, periodsPerYear, expectedPeriod * periodsPerYear);
 
         return new OptimizationResult
         {
             Weights = BuildWeightDictionary(tickers, normalized),
-            ExpectedReturnAnnual = expectedReturn,
-            VolatilityAnnual = volatility,
+            ExpectedReturnAnnual = expectedReturnAnnual,
+            VolatilityAnnual = volatilityAnnual,
             Observations = nObs,
             Method = req.Method,
             Notes = rawResult.Notes
@@ -219,7 +224,56 @@ public class MarkowitzOptimizer
             dict[tickers[i]] = weights[i];
         return dict;
     }
+
+    private static double ConvertAnnualToPeriodic(double annualRate, double periodsPerYear)
+    {
+        if (periodsPerYear <= 0)
+            throw new InvalidOperationException("Periods per year must be positive.");
+
+        if (Math.Abs(annualRate) < 1e-12)
+            return 0;
+
+        double baseValue = 1.0 + annualRate;
+        if (baseValue <= 0)
+            throw new InvalidOperationException("Annual rate must be greater than -100%.");
+
+        return Math.Pow(baseValue, 1.0 / periodsPerYear) - 1.0;
+    }
+
+    private static double[] BuildPortfolioSeries(double[,] returnsMatrix, double[] weights)
+    {
+        int nObs = returnsMatrix.GetLength(0);
+        int assets = returnsMatrix.GetLength(1);
+        var series = new double[nObs];
+        for (int t = 0; t < nObs; t++)
+        {
+            double value = 0.0;
+            for (int j = 0; j < assets; j++)
+                value += returnsMatrix[t, j] * weights[j];
+            series[t] = value;
+        }
+        return series;
+    }
+
+    private static double AnnualizeFromSeries(double[] returns, double periodsPerYear, double fallbackArithmetic)
+    {
+        if (returns.Length == 0)
+            return 0.0;
+
+        double logSum = 0.0;
+        for (int i = 0; i < returns.Length; i++)
+        {
+            double factor = 1.0 + returns[i];
+            if (factor <= 0)
+                return fallbackArithmetic;
+            logSum += Math.Log(factor);
+        }
+
+        double avgLog = logSum / returns.Length;
+        double annualized = Math.Exp(avgLog * periodsPerYear) - 1.0;
+        if (!double.IsFinite(annualized))
+            return fallbackArithmetic;
+        return annualized;
+    }
 }
-
-
 

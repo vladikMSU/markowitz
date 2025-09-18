@@ -1,89 +1,126 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
 using Markowitz.Core.Models;
 
 namespace Markowitz.Core.Services;
 
 public class ReturnService
 {
-    public (string[] tickers, double[,] returnsMatrix, int nObs, DateTime[] dates)
-    BuildAlignedLogReturns(OptimizationRequest req)
+    private const double SecondsPerYear = 365.25 * 24 * 3600;
+
+    public ReturnData BuildAlignedReturns(OptimizationRequest req)
     {
-        if (req.PricesByTicker == null || req.PricesByTicker.Count == 0)
+        if (req.PricesByTicker is null || req.PricesByTicker.Count == 0)
             throw new ArgumentException("No tickers provided.");
 
-        // 1) Собираем последовательности (dt, close) ПО ВСЕМ тикерам
-        var series = new Dictionary<string, List<(DateTime dt, double close)>>();
-        foreach (var kv in req.PricesByTicker)
-        {
-            var ticker = kv.Key;
-            var bars = kv.Value ?? new List<PriceBar>();
-            var ordered = bars.OrderBy(b => b.Timestamp).ToList();
+        var tickers = req.PricesByTicker.Keys
+            .OrderBy(t => t, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
 
-            var list = new List<(DateTime dt, double close)>(ordered.Count);
-            foreach (var b in ordered)
+        var perTicker = new Dictionary<string, SortedDictionary<DateTime, double>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var ticker in tickers)
+        {
+            var bars = req.PricesByTicker[ticker] ?? new List<PriceBar>();
+            var sorted = new SortedDictionary<DateTime, double>();
+            foreach (var bar in bars.OrderBy(b => b.Timestamp))
             {
-                // используем Date (без времени) для выравнивания по торговым дням
-                list.Add((b.Timestamp.Date, (double)b.Close));
+                sorted[bar.Timestamp] = (double)bar.Close;
             }
-            series[ticker] = list;
+
+            if (sorted.Count < 2)
+                throw new InvalidOperationException($"Ticker '{ticker}' must contain at least two price points.");
+
+            perTicker[ticker] = sorted;
         }
 
-        // 2) Пересечение дат
-        var dateSets = series.Values
-            .Select(lst => lst.Select(x => x.dt).ToHashSet())
-            .ToList();
+        var aligned = BuildAlignedTimeline(perTicker, req);
+        if (aligned.Count < 2)
+            throw new InvalidOperationException("Not enough aligned timestamps to compute returns.");
 
-        if (dateSets.Count == 0) throw new InvalidOperationException("Empty series.");
+        var returnsMatrix = new double[aligned.Count - 1, tickers.Length];
+        var returnDates = new DateTime[aligned.Count - 1];
 
-        var intersect = new HashSet<DateTime>(dateSets[0]);
-        foreach (var s in dateSets.Skip(1)) intersect.IntersectWith(s);
-
-        var allDates = intersect.OrderBy(d => d).ToList();
-
-        // Период/Lookback фильтры
-        if (req.Start.HasValue) allDates = allDates.Where(d => d >= req.Start.Value.Date).ToList();
-        if (req.End.HasValue)   allDates = allDates.Where(d => d <= req.End.Value.Date).ToList();
-        if (req.LookbackDays is int lb && allDates.Count > lb)
-            allDates = allDates.Skip(allDates.Count - lb).ToList();
-
-        if (allDates.Count < 2)
-            throw new InvalidOperationException("Not enough aligned dates for returns.");
-
-        // 3) Тикеры — БЕРЁМ ИЗ ЗАПРОСА (не из временного словаря), чтобы ничего не потерять
-        var tickers = req.PricesByTicker.Keys.OrderBy(k => k).ToArray();
-
-        // 4) Матрица цен на allDates (пересечение — гарантирует наличие ключей)
-        var nT = tickers.Length;
-        var prices = new double[allDates.Count, nT];
-
-        for (int j = 0; j < nT; j++)
+        for (int t = 1; t < aligned.Count; t++)
         {
-            var seq = series[tickers[j]];
-            var map = seq.ToDictionary(x => x.dt, x => x.close);
-            for (int t = 0; t < allDates.Count; t++)
+            var current = aligned[t];
+            var previous = aligned[t - 1];
+            returnDates[t - 1] = current;
+
+            for (int j = 0; j < tickers.Length; j++)
             {
-                if (!map.TryGetValue(allDates[t], out var px))
-                    throw new InvalidOperationException($"Missing price for {tickers[j]} on {allDates[t]:yyyy-MM-dd}");
-                prices[t, j] = px;
+                var series = perTicker[tickers[j]];
+                if (!series.TryGetValue(previous, out var prevClose) ||
+                    !series.TryGetValue(current, out var currClose))
+                {
+                    throw new InvalidOperationException($"Missing price for '{tickers[j]}' between {previous:O} and {current:O}.");
+                }
+
+                if (!double.IsFinite(prevClose) || Math.Abs(prevClose) < 1e-12)
+                    throw new InvalidOperationException($"Invalid price for '{tickers[j]}' at {previous:O}.");
+
+                var ret = (currClose / prevClose) - 1.0;
+                returnsMatrix[t - 1, j] = double.IsFinite(ret) ? ret : 0.0;
             }
         }
 
-        // 5) Лог-доходности
-        var nObs = allDates.Count - 1;
-        var rets = new double[nObs, nT];
-        var retDates = new DateTime[nObs]; // даты, на которые рассчитываются доходности (t=1..T-1)
-
-        for (int t = 1; t < allDates.Count; t++)
-        {
-            retDates[t - 1] = allDates[t];
-            for (int j = 0; j < nT; j++)
-            {
-                var r = Math.Log(prices[t, j] / prices[t - 1, j]);
-                rets[t - 1, j] = double.IsFinite(r) ? r : 0.0;
-            }
-        }
-
-        // возвращаем даты доходностей (как и было в твоём тесте сейчас)
-        return (tickers, rets, nObs, retDates);
+        double periodsPerYear = InferPeriodsPerYear(aligned, req.PeriodsPerYearOverride);
+        return new ReturnData(tickers, returnsMatrix, returnDates, periodsPerYear);
     }
 
+    private static List<DateTime> BuildAlignedTimeline(
+        Dictionary<string, SortedDictionary<DateTime, double>> perTicker,
+        OptimizationRequest req)
+    {
+        if (perTicker.Count == 0)
+            throw new InvalidOperationException("No ticker data available.");
+
+        var enumerator = perTicker.Values.GetEnumerator();
+        enumerator.MoveNext();
+        var aligned = new HashSet<DateTime>(enumerator.Current.Keys);
+        while (enumerator.MoveNext())
+            aligned.IntersectWith(enumerator.Current.Keys);
+
+        var ordered = aligned.OrderBy(d => d).ToList();
+
+        if (req.Start.HasValue)
+            ordered = ordered.Where(d => d >= req.Start.Value).ToList();
+        if (req.End.HasValue)
+            ordered = ordered.Where(d => d <= req.End.Value).ToList();
+        if (req.LookbackDays is int lb && ordered.Count > lb)
+            ordered = ordered.Skip(ordered.Count - lb).ToList();
+
+        return ordered;
+    }
+
+    private static double InferPeriodsPerYear(List<DateTime> aligned, double? overrideValue)
+    {
+        if (overrideValue is double manual)
+        {
+            if (!double.IsFinite(manual) || manual <= 0)
+                throw new InvalidOperationException("Override for periods per year must be a positive finite number.");
+            return manual;
+        }
+
+        if (aligned.Count < 2)
+            throw new InvalidOperationException("Cannot infer frequency from fewer than two timestamps.");
+
+        double durationSeconds = (aligned[^1] - aligned[0]).TotalSeconds;
+        if (durationSeconds <= 0)
+            throw new InvalidOperationException("Cannot infer frequency when timestamps do not advance.");
+
+        double observations = aligned.Count - 1;
+        double periodsPerYear = observations * SecondsPerYear / durationSeconds;
+
+        if (!double.IsFinite(periodsPerYear) || periodsPerYear <= 0)
+            throw new InvalidOperationException("Failed to infer a valid sampling frequency.");
+
+        return periodsPerYear;
+    }
 }
+
+public sealed record ReturnData(
+    string[] Tickers,
+    double[,] Returns,
+    DateTime[] ReturnDates,
+    double PeriodsPerYear);

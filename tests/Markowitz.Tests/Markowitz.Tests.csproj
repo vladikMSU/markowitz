@@ -22,6 +22,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Include="TestData\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\\..\\src\\Markowitz.Core\\Markowitz.Core.csproj" />
   </ItemGroup>
 

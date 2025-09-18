@@ -1,4 +1,4 @@
-using Markowitz.Core.Models;
+﻿using Markowitz.Core.Models;
 
 namespace Markowitz.Core.Services.Optimizers;
 
@@ -222,11 +222,13 @@ public class HeuristicOptimizer : IPortfolioOptimizer
 
     private static double Evaluate(double[] weights, OptimizationProblem problem)
     {
+        if (problem.PeriodsPerYear <= 0)
+            throw new InvalidOperationException("Sampling frequency must be positive.");
+
         var mu = problem.Mu;
         var scenarios = problem.ScenarioReturns ?? throw new InvalidOperationException("Scenario returns missing.");
-        double expectedAnnual = Dot(mu, weights);
-        double rfAnnual = problem.RiskFreeRate;
-        double rfDaily = rfAnnual / 252.0;
+        double expectedPeriod = Dot(mu, weights);
+        double rfPeriod = problem.RiskFreeRate;
 
         int scenarioCount = scenarios.GetLength(0);
         int assetCount = scenarios.GetLength(1);
@@ -237,17 +239,17 @@ public class HeuristicOptimizer : IPortfolioOptimizer
             for (int j = 0; j < assetCount; j++)
                 ret += scenarios[i, j] * weights[j];
 
-            double downside = Math.Min(0.0, ret - rfDaily);
+            double downside = Math.Min(0.0, ret - rfPeriod);
             downsideSum += downside * downside;
         }
 
-        double downsideDevDaily = Math.Sqrt(downsideSum / Math.Max(1, scenarioCount));
-        double downsideDevAnnual = downsideDevDaily * Math.Sqrt(252.0);
-        double denom = downsideDevAnnual;
+        double downsideDevPeriod = Math.Sqrt(downsideSum / Math.Max(1, scenarioCount));
+        double denom = downsideDevPeriod;
         if (denom < 1e-6)
             denom = 1e-6;
 
-        double sortino = (expectedAnnual - rfAnnual) / denom;
+        double baseRatio = (expectedPeriod - rfPeriod) / denom;
+        double sortino = baseRatio * Math.Sqrt(problem.PeriodsPerYear);
         if (double.IsNaN(sortino) || double.IsInfinity(sortino))
             return -1e6;
         return sortino;
@@ -261,4 +263,5 @@ public class HeuristicOptimizer : IPortfolioOptimizer
         return sum;
     }
 }
+
 

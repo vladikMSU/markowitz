@@ -1,4 +1,4 @@
-namespace Markowitz.Core.Models;
+﻿namespace Markowitz.Core.Models;
 
 public record OptimizationProblem(
     string[] Tickers,
@@ -11,4 +11,5 @@ public record OptimizationProblem(
     bool AllowShort,
     double[,]? ScenarioReturns,
     double? CvarAlpha,
-    OptimizationMethod Method);
+    OptimizationMethod Method,
+    double PeriodsPerYear);
