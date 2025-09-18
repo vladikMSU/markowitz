@@ -113,30 +113,37 @@
       @if (Model.AssetBounds.Any())
       {
         <div class="mt-4">
-          <label class="form-label">Per-asset bounds</label>
-          <div class="table-responsive">
-            <table class="table table-sm table-striped align-middle">
-              <thead>
-                <tr>
-                  <th>Ticker</th>
-                  <th style="width:30%">Min</th>
-                  <th style="width:30%">Max</th>
-                </tr>
-              </thead>
-              <tbody>
-              @for (int i = 0; i < Model.AssetBounds.Count; i++)
-              {
-                <tr>
-                  <td>
-                    @Model.AssetBounds[i].Ticker
-                    <input type="hidden" asp-for="AssetBounds[i].Ticker" />
-                  </td>
-                  <td><input type="number" step="0.0001" class="form-control" asp-for="AssetBounds[i].Lower" /></td>
-                  <td><input type="number" step="0.0001" class="form-control" asp-for="AssetBounds[i].Upper" /></td>
-                </tr>
-              }
-              </tbody>
-            </table>
+          <div class="per-asset-card border rounded-3 shadow-sm">
+            <button type="button" class="per-asset-toggle" id="per-asset-toggle" aria-expanded="false" aria-controls="per-asset-content">
+              <span class="toggle-title">Per-asset bounds</span>
+              <span class="chevron" aria-hidden="true"></span>
+            </button>
+            <div class="per-asset-content" id="per-asset-content">
+              <div class="table-responsive">
+                <table class="table table-sm table-striped align-middle">
+                  <thead>
+                    <tr>
+                      <th>Ticker</th>
+                      <th style="width:30%">Min</th>
+                      <th style="width:30%">Max</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                  @for (int i = 0; i < Model.AssetBounds.Count; i++)
+                  {
+                    <tr>
+                      <td>
+                        @Model.AssetBounds[i].Ticker
+                        <input type="hidden" asp-for="AssetBounds[i].Ticker" />
+                      </td>
+                      <td><input type="number" step="0.0001" class="form-control" asp-for="AssetBounds[i].Lower" /></td>
+                      <td><input type="number" step="0.0001" class="form-control" asp-for="AssetBounds[i].Upper" /></td>
+                    </tr>
+                  }
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
         </div>
       }
@@ -191,6 +198,81 @@
   </script>
 }
 
+
+<style>
+  .per-asset-card {
+    background-color: #ffffff;
+    border-radius: 0.75rem;
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    overflow: hidden;
+  }
+
+  .per-asset-toggle {
+    width: 100%;
+    padding: 0.9rem 1.25rem;
+    border: 0;
+    background: linear-gradient(180deg, #f8f9fa, #eef1f4);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-weight: 600;
+    font-size: 1rem;
+    color: inherit;
+    text-align: left;
+    transition: background-color 0.2s ease, box-shadow 0.2s ease;
+  }
+
+  .per-asset-toggle:hover,
+  .per-asset-toggle:focus-visible {
+    background: linear-gradient(180deg, #e9ecef, #dee2e6);
+  }
+
+  .per-asset-toggle:focus-visible {
+    outline: 0;
+    box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
+  }
+
+  .per-asset-toggle .toggle-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .per-asset-toggle .chevron {
+    display: inline-block;
+    width: 0.65rem;
+    height: 0.65rem;
+    border-right: 2px solid currentColor;
+    border-bottom: 2px solid currentColor;
+    transform: rotate(-45deg);
+    transition: transform 0.2s ease;
+  }
+
+  .per-asset-toggle[aria-expanded="true"] .chevron {
+    transform: rotate(45deg);
+  }
+
+  .per-asset-content {
+    display: none;
+    padding: 1.25rem;
+    background-color: #ffffff;
+  }
+
+  .per-asset-content.active {
+    display: block;
+  }
+
+  .per-asset-content .table {
+    margin-bottom: 0;
+  }
+
+  @@media (prefers-reduced-motion: reduce) {
+    .per-asset-toggle,
+    .per-asset-content {
+      transition: none;
+    }
+  }
+</style>
 <script>
   document.addEventListener('DOMContentLoaded', function () {
     const tabs = document.querySelectorAll('#optimizerTabs .nav-link');
@@ -230,6 +312,22 @@
         input.addEventListener('change', (event) => {
           syncAllowShort(event.target.checked);
         });
+      });
+    }
+
+    const perAssetToggle = document.getElementById('per-asset-toggle');
+    const perAssetContent = document.getElementById('per-asset-content');
+    if (perAssetToggle && perAssetContent) {
+      const setPerAssetState = (isExpanded) => {
+        perAssetToggle.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
+        perAssetContent.classList.toggle('active', isExpanded);
+        perAssetContent.hidden = !isExpanded;
+      };
+      setPerAssetState(false);
+      perAssetToggle.addEventListener('click', (event) => {
+        event.preventDefault();
+        const isExpanded = perAssetToggle.getAttribute('aria-expanded') === 'true';
+        setPerAssetState(!isExpanded);
       });
     }
 
