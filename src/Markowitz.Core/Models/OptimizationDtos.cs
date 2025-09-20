@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 
@@ -59,4 +60,23 @@ public class OptimizationResult
     public OptimizationMethod Method { get; init; }
     public OptimizationTarget? Target { get; init; }
     public string? Notes { get; init; }
+}
+
+public class PortfolioPoint
+{
+    public double ExpectedReturnAnnual { get; init; }
+    public double VarianceAnnual { get; init; }
+    public double VolatilityAnnual { get; init; }
+}
+
+public sealed class PortfolioFrontierPoint : PortfolioPoint
+{
+    public Dictionary<string, double> Weights { get; init; } = new();
+}
+
+public class PortfolioVisualization
+{
+    public IReadOnlyList<PortfolioPoint> PortfolioSpace { get; init; } = Array.Empty<PortfolioPoint>();
+    public IReadOnlyList<PortfolioFrontierPoint> EfficientFrontier { get; init; } = Array.Empty<PortfolioFrontierPoint>();
+    public int? SelectedFrontierIndex { get; init; }
 }

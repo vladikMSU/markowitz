@@ -1,14 +1,29 @@
 @page
 @model Markowitz.Web.Pages.IndexModel
 @using Microsoft.AspNetCore.Mvc.Rendering
+@using System.Linq
 @{
     ViewData["Title"] = "Markowitz Optimizer";
     var showTargetCard = Model.Method == Markowitz.Core.Models.OptimizationMethod.QuadraticProgramming;
+    var tabCandidate = (Model.ActiveTab ?? "basic").ToLowerInvariant();
+    if (tabCandidate != "basic" && tabCandidate != "pro" && tabCandidate != "visualizations")
+    {
+        tabCandidate = "basic";
+    }
+    var activeTabKey = tabCandidate;
+    var basicTabIsActive = activeTabKey == "basic";
+    var proTabIsActive = activeTabKey == "pro";
+    var visualizationsTabIsActive = activeTabKey == "visualizations";
+    var targetReturnEnabled = Model.Method == Markowitz.Core.Models.OptimizationMethod.QuadraticProgramming &&
+        Model.Target == Markowitz.Core.Models.OptimizationTarget.TargetReturn;
 }
 
-<h1>Markowitz Optimizer (Pro)</h1>
+<h1>Markowitz Optimizer</h1>
 
 <form method="post" enctype="multipart/form-data">
+  <input type="hidden" asp-for="ActiveTab" id="active-tab-field" />
+  <input type="hidden" asp-for="TargetCardExpanded" id="target-card-state" />
+  <input type="hidden" asp-for="PerAssetExpanded" id="per-asset-state" />
   <button type="submit" name="action" value="upload" id="upload-submit" class="d-none" formnovalidate>Upload</button>
   <div asp-validation-summary="ModelOnly" class="text-danger"></div>
 
@@ -36,15 +51,18 @@
 
   <ul class="nav nav-tabs" id="optimizerTabs" role="tablist">
     <li class="nav-item" role="presentation">
-      <button type="button" class="nav-link active" data-target="basic-tab" id="basic-tab-btn">Core</button>
+      <button type="button" class="nav-link @(basicTabIsActive ? "active" : string.Empty)" data-target="basic-tab" data-tab-key="basic" id="basic-tab-btn" aria-selected="@(basicTabIsActive ? "true" : "false")">Core</button>
     </li>
     <li class="nav-item" role="presentation">
-      <button type="button" class="nav-link" data-target="pro-tab" id="pro-tab-btn">Pro</button>
+      <button type="button" class="nav-link @(proTabIsActive ? "active" : string.Empty)" data-target="pro-tab" data-tab-key="pro" id="pro-tab-btn" aria-selected="@(proTabIsActive ? "true" : "false")">Pro</button>
+    </li>
+    <li class="nav-item" role="presentation">
+      <button type="button" class="nav-link @(visualizationsTabIsActive ? "active" : string.Empty)" data-target="visualizations-tab" data-tab-key="visualizations" id="visualizations-tab-btn" aria-selected="@(visualizationsTabIsActive ? "true" : "false")">Visualizations</button>
     </li>
   </ul>
 
   <div class="tab-content border border-top-0 p-3">
-    <div class="tab-pane fade show active" id="basic-tab" role="tabpanel" aria-labelledby="basic-tab-btn">
+    <div class="tab-pane fade@(basicTabIsActive ? " show active" : string.Empty)" id="basic-tab" data-pane-key="basic" role="tabpanel" aria-labelledby="basic-tab-btn">
       <div class="form-check mb-3">
         <input class="form-check-input" type="checkbox" asp-for="AllowShort" id="allow-short-basic" data-allow-short-sync="true">
         <label class="form-check-label" for="allow-short-basic">Allow short selling</label>
@@ -60,13 +78,13 @@
         </div>
         <div class="col-md-4">
           <label class="form-label">Target return, % (annual, optional)</label>
-          <input type="number" step="0.0001" class="form-control" asp-for="TargetReturnAnnualPercent" />
+          <input type="number" step="0.0001" class="form-control" asp-for="CoreTargetReturnAnnualPercent" id="target-return-core" />
           <small class="form-text text-muted">Leave empty for global minimum variance.</small>
         </div>
       </div>
     </div>
 
-    <div class="tab-pane fade" id="pro-tab" role="tabpanel" aria-labelledby="pro-tab-btn">
+    <div class="tab-pane fade@(proTabIsActive ? " show active" : string.Empty)" id="pro-tab" data-pane-key="pro" role="tabpanel" aria-labelledby="pro-tab-btn">
       <div class="form-check mb-3">
         <input class="form-check-input" type="checkbox" asp-for="AllowShort" id="allow-short-pro" data-allow-short-sync="true">
         <label class="form-check-label" for="allow-short-pro">Allow short selling</label>
@@ -81,6 +99,15 @@
           <input type="date" class="form-control" asp-for="End" />
         </div>
       </div>
+      <div class="mb-3 mt-3">
+        <label class="form-label">Optimization method</label>
+        <select class="form-select" asp-for="Method" id="method-select">
+          @foreach (var method in Enum.GetValues(typeof(Markowitz.Core.Models.OptimizationMethod)).Cast<Markowitz.Core.Models.OptimizationMethod>().Where(m => m != Markowitz.Core.Models.OptimizationMethod.Conic))
+          {
+            <option value="@method">@method</option>
+          }
+        </select>
+      </div>
       <div id="target-card-wrapper" class="mt-4 @(showTargetCard ? "" : "d-none")">
         <div class="target-card border rounded-3 shadow-sm">
           <button type="button" class="target-toggle" id="target-toggle" aria-expanded="false" aria-controls="target-content">
@@ -93,23 +120,14 @@
                 <label class="form-label">Optimization target</label>
                 <select class="form-select" asp-for="Target" id="target-select" asp-items="Html.GetEnumSelectList<Markowitz.Core.Models.OptimizationTarget>()"></select>
               </div>
-              <div class="col-md-6">
-                <label class="form-label">Target volatility, % (annual, optional)</label>
-                <input type="number" step="0.0001" class="form-control" asp-for="TargetVolatilityAnnualPercent" id="target-volatility-input" />
-                <small class="form-text text-muted">Leave blank to skip the volatility cap.</small>
+              <div class="col-md-6 @(targetReturnEnabled ? string.Empty : "target-input-disabled")" id="target-return-wrapper" aria-disabled="@(targetReturnEnabled ? "false" : "true")">
+                <label class="form-label">Target return, % (annual)</label>
+                <input type="number" step="0.0001" class="form-control" asp-for="ProTargetReturnAnnualPercent" id="target-return-pro" disabled="@(!targetReturnEnabled)" />
+                <small class="form-text text-muted">Enabled only when Target return is selected.</small>
               </div>
             </div>
           </div>
         </div>
-      </div>
-      <div class="mb-3 mt-3">
-        <label class="form-label">Optimization method</label>
-        <select class="form-select" asp-for="Method" id="method-select">
-          @foreach (var method in Enum.GetValues(typeof(Markowitz.Core.Models.OptimizationMethod)).Cast<Markowitz.Core.Models.OptimizationMethod>().Where(m => m != Markowitz.Core.Models.OptimizationMethod.Conic))
-          {
-            <option value="@method">@method</option>
-          }
-        </select>
       </div>
       <div class="row g-3">
         <div class="col-md-4">
@@ -175,10 +193,102 @@
         <p class="text-muted mt-3">Upload data to configure per-asset bounds.</p>
       }
     </div>
+    <div class="tab-pane fade@(visualizationsTabIsActive ? " show active" : string.Empty)" id="visualizations-tab" data-pane-key="visualizations" role="tabpanel" aria-labelledby="visualizations-tab-btn">
+      @{
+        var visualization = Model.Visualization;
+        var hasVisualization = visualization != null && visualization.EfficientFrontier.Count > 0;
+        var selectedIndex = hasVisualization ? visualization!.SelectedFrontierIndex.GetValueOrDefault(0) : 0;
+        if (hasVisualization)
+        {
+            if (selectedIndex < 0)
+            {
+                selectedIndex = 0;
+            }
+            if (selectedIndex >= visualization!.EfficientFrontier.Count)
+            {
+                selectedIndex = visualization.EfficientFrontier.Count - 1;
+            }
+        }
+        var minFrontierReturn = hasVisualization ? visualization!.EfficientFrontier[0].ExpectedReturnAnnual : 0.0;
+        var maxFrontierReturn = hasVisualization ? visualization!.EfficientFrontier[visualization.EfficientFrontier.Count - 1].ExpectedReturnAnnual : 0.0;
+        var sliderMax = hasVisualization ? System.Math.Max(visualization!.EfficientFrontier.Count - 1, 0) : 0;
+        var selectedFrontierPoint = hasVisualization ? visualization!.EfficientFrontier[selectedIndex] : null;
+      }
+      @if (hasVisualization)
+      {
+        <div class="visualization-wrapper">
+          <div class="row g-4 align-items-start">
+            <div class="col-12 col-xl-8">
+              <div class="p-3 border rounded bg-white h-100">
+                <div class="ratio ratio-16x9">
+                  <canvas id="portfolioScatter"></canvas>
+                </div>
+              </div>
+            </div>
+            <div class="col-12 col-xl-4">
+              <div class="p-3 border rounded bg-white">
+                <h5 class="mb-3">Frontier weights</h5>
+                <ul class="list-unstyled mb-3" id="frontierWeightsList">
+                  @if (selectedFrontierPoint is not null)
+                  {
+                    foreach (var kv in selectedFrontierPoint.Weights.OrderByDescending(kv => kv.Value))
+                    {
+                      <li class="d-flex justify-content-between"><span>@kv.Key</span><span>@kv.Value.ToString("P2")</span></li>
+                    }
+                  }
+                </ul>
+                @if (selectedFrontierPoint is not null)
+                {
+                  <div id="frontierStats" class="small">
+                    <div class="d-flex justify-content-between">
+                      <span>Expected return</span>
+                      <span class="fw-semibold" data-field="return">@selectedFrontierPoint.ExpectedReturnAnnual.ToString("P2")</span>
+                    </div>
+                    <div class="d-flex justify-content-between">
+                      <span>Volatility</span>
+                      <span class="fw-semibold" data-field="volatility">@selectedFrontierPoint.VolatilityAnnual.ToString("P2")</span>
+                    </div>
+                  </div>
+                }
+              </div>
+            </div>
+          </div>
+          <div class="mt-4">
+            <label class="form-label fw-semibold" for="frontierSlider">Target return selection</label>
+            <input type="range" class="form-range" id="frontierSlider" min="0" max="@sliderMax" step="1" value="@selectedIndex" />
+            <div class="d-flex justify-content-between text-muted small mt-1">
+              <span>Min: @minFrontierReturn.ToString("P2")</span>
+              <span id="frontierCurrentReturn">Selected: @(selectedFrontierPoint?.ExpectedReturnAnnual.ToString("P2") ?? "-")</span>
+              <span>Max: @maxFrontierReturn.ToString("P2")</span>
+            </div>
+          </div>
+          <div class="mt-3">
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="toggleReturnScale">Scale: <span id="returnScaleLabel">Log</span></button>
+          </div>
+        </div>
+
+        <script type="application/json" id="visualizationData">
+          @Html.Raw(System.Text.Json.JsonSerializer.Serialize(new
+          {
+              portfolioSpace = visualization!.PortfolioSpace,
+              efficientFrontier = visualization!.EfficientFrontier,
+              selectedIndex = selectedIndex
+          }, new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase }))
+        </script>
+      }
+      else
+      {
+        <p class="text-muted mb-0">Upload price data to view the variance / return visualizations.</p>
+      }
+    </div>
   </div>
 
-  <button type="submit" name="action" value="optimize" class="btn btn-primary mt-3">Optimize</button>
+  <div id="optimize-button-wrapper" class="mt-3 @(visualizationsTabIsActive ? "d-none" : string.Empty)">
+    <button type="submit" name="action" value="optimize" class="btn btn-primary">Optimize</button>
+  </div>
 </form>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
 @if (Model.Result != null)
 {
@@ -213,17 +323,331 @@
     </tbody>
   </table>
 
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script>
-    const data = {
-      labels: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Result.Weights.Keys)),
-      datasets: [{
-        data: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Result.Weights.Values))
-      }]
-    };
-    new Chart(document.getElementById('weightsPie'), { type: 'pie', data: data });
+    const pieCanvas = document.getElementById('weightsPie');
+    if (pieCanvas) {
+      const pieData = {
+        labels: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Result.Weights.Keys)),
+        datasets: [{
+          data: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Result.Weights.Values))
+        }]
+      };
+      new Chart(pieCanvas, { type: 'pie', data: pieData });
+    }
   </script>
 }
+
+
+
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    if (typeof Chart === 'undefined') {
+      console.warn('Chart.js not loaded');
+      return;
+    }
+
+    const visDataElement = document.getElementById('visualizationData');
+    if (!visDataElement) return;
+
+    let payload;
+    try {
+      payload = JSON.parse(visDataElement.textContent || 'null');
+    } catch (error) {
+      console.warn('Failed to parse visualization payload:', error);
+      return;
+    }
+
+    const rawRandom = Array.isArray(payload?.portfolioSpace) ? payload.portfolioSpace : [];
+    const rawFrontier = Array.isArray(payload?.efficientFrontier) ? payload.efficientFrontier : [];
+
+    const ctx = document.getElementById('portfolioScatter');
+    const slider = document.getElementById('frontierSlider');
+    const weightsList = document.getElementById('frontierWeightsList');
+    const statsContainer = document.getElementById('frontierStats');
+    const currentReturnLabel = document.getElementById('frontierCurrentReturn');
+    const scaleButton = document.getElementById('toggleReturnScale');
+    const scaleLabel = document.getElementById('returnScaleLabel');
+    const visTabButton = document.getElementById('visualizations-tab-btn');
+    const visTabPane = document.getElementById('visualizations-tab');
+
+    if (!ctx || rawFrontier.length === 0) {
+      if (slider) {
+        slider.min = '0';
+        slider.max = '0';
+        slider.value = '0';
+        slider.disabled = true;
+      }
+      return;
+    }
+
+    const SCALE = { LOG: 'log', LINEAR: 'linear' };
+    let scaleMode = SCALE.LOG;
+    let chart = null;
+    let sliderBound = false;
+    let scaleBound = false;
+
+    const ensureNumber = (value) => {
+      const num = Number(value);
+      return Number.isFinite(num) ? num : 0;
+    };
+    const toPercent = (unit) => ensureNumber(unit) * 100;
+    const formatPercentValue = (percent) => `${ensureNumber(percent).toFixed(2)}%`;
+    const formatUnitPercent = (unit) => formatPercentValue(toPercent(unit));
+
+    const randomPoints = rawRandom.map((item) => {
+      const variance = ensureNumber(item?.varianceAnnual);
+      return {
+        returnUnit: ensureNumber(item?.expectedReturnAnnual),
+        volatilityUnit: variance,
+        volatilityUnit: variance > 0 ? Math.sqrt(variance) : 0
+      };
+    });
+
+    const frontierPoints = rawFrontier.map((item) => {
+      const variance = ensureNumber(item?.varianceAnnual);
+      return {
+        returnUnit: ensureNumber(item?.expectedReturnAnnual),
+        volatilityUnit: variance,
+        volatilityUnit: variance > 0 ? Math.sqrt(variance) : 0,
+        original: item
+      };
+    });
+
+    const transformReturnUnit = (unit) => {
+      const percent = toPercent(unit);
+      if (scaleMode === SCALE.LINEAR) return percent;
+      const sign = percent >= 0 ? 1 : -1;
+      return sign * Math.log1p(Math.abs(percent));
+    };
+
+    const transformVolUnit = (unit) => {
+      const percent = Math.max(0, toPercent(unit));
+      return scaleMode === SCALE.LINEAR ? percent : Math.log1p(percent);
+    };
+
+    const revertReturnValue = (value) => {
+      if (scaleMode === SCALE.LINEAR) return value;
+      const sign = value >= 0 ? 1 : -1;
+      return sign * Math.expm1(Math.abs(value));
+    };
+
+    const revertVolValue = (value) => scaleMode === SCALE.LINEAR ? value : Math.expm1(Math.max(value, 0));
+
+    const buildDataset = (points, baseConfig) => ({
+      ...baseConfig,
+      data: points.map((point) => ({
+        x: transformVolUnit(point.volatilityUnit),
+        y: transformReturnUnit(point.returnUnit),
+        returnUnit: point.returnUnit,
+        volatilityUnit: point.volatilityUnit,
+        volatilityUnit: point.volatilityUnit
+      }))
+    });
+
+    const renderWeights = (source) => {
+      if (!weightsList) return;
+      const entries = source?.weights ? Object.entries(source.weights) : [];
+      entries.sort((a, b) => b[1] - a[1]);
+      weightsList.innerHTML = entries
+        .map(([key, value]) => `<li class="d-flex justify-content-between"><span>${key}</span><span>${formatUnitPercent(value)}</span></li>`)
+        .join('');
+    };
+
+    const updateStats = (source) => {
+      if (!statsContainer) return;
+      const setField = (name, value) => {
+        const target = statsContainer.querySelector(`[data-field="${name}"]`);
+        if (target) target.textContent = value;
+      };
+      const expected = ensureNumber(source?.expectedReturnAnnual);
+      const variance = ensureNumber(source?.varianceAnnual);
+      const volatility = variance > 0 ? Math.sqrt(variance) : ensureNumber(source?.volatilityAnnual);
+      setField('return', formatUnitPercent(expected));
+      setField('volatility', formatPercentValue(toPercent(volatility)));
+      if (currentReturnLabel) {
+        currentReturnLabel.textContent = `Selected: ${formatUnitPercent(expected)}`;
+      }
+    };
+
+    const updateSliderUI = () => {
+      if (!slider) return;
+      const maxIndex = Math.max(frontierPoints.length - 1, 0);
+      slider.min = '0';
+      slider.max = String(maxIndex);
+      slider.value = String(selectedIndex);
+      slider.disabled = frontierPoints.length <= 1;
+    };
+
+    const updateScaleLabel = () => {
+      if (scaleLabel) {
+        scaleLabel.textContent = scaleMode === SCALE.LINEAR ? 'Linear' : 'Log';
+      }
+    };
+
+    const updateAxisTitle = () => {
+      if (!chart) return;
+      chart.options.scales.y.title.text = scaleMode === SCALE.LINEAR
+        ? 'Return (annual %)' : 'Return (annual, signed log)';
+      chart.options.scales.x.title.text = scaleMode === SCALE.LINEAR
+        ? 'Volatility (annual %)' : 'Volatility (annual %, log1p)';
+    };
+
+    const configureTicks = () => {
+      if (!chart) return;
+      chart.options.scales.x.ticks.callback = (value) => formatPercentValue(revertVolValue(value));
+      chart.options.scales.y.ticks.callback = (value) => formatPercentValue(revertReturnValue(value));
+    };
+
+    const rebuildDatasets = () => {
+      if (!chart) return;
+      chart.data.datasets[0].data = randomPoints.map((point) => ({
+        x: transformVolUnit(point.volatilityUnit),
+        y: transformReturnUnit(point.returnUnit),
+        returnUnit: point.returnUnit,
+        volatilityUnit: point.volatilityUnit,
+        volatilityUnit: point.volatilityUnit
+      }));
+      chart.data.datasets[1].data = frontierPoints.map((point) => ({
+        x: transformVolUnit(point.volatilityUnit),
+        y: transformReturnUnit(point.returnUnit),
+        returnUnit: point.returnUnit,
+        volatilityUnit: point.volatilityUnit,
+        volatilityUnit: point.volatilityUnit
+      }));
+    };
+
+    const updateHighlight = (index) => {
+      if (!chart) return;
+      const clamped = Math.min(Math.max(index, 0), frontierPoints.length - 1);
+      const point = frontierPoints[clamped];
+      if (!point) return;
+      chart.data.datasets[2].data = [{
+        x: transformVolUnit(point.volatilityUnit),
+        y: transformReturnUnit(point.returnUnit),
+        returnUnit: point.returnUnit,
+        volatilityUnit: point.volatilityUnit,
+        volatilityUnit: point.volatilityUnit
+      }];
+      chart.update('none');
+      renderWeights(point.original);
+      updateStats(point.original);
+      selectedIndex = clamped;
+      if (slider && slider.value !== String(clamped)) {
+        slider.value = String(clamped);
+      }
+    };
+
+    const randomDatasetConfig = {
+      label: 'Simulated portfolios',
+      backgroundColor: 'rgba(99, 110, 250, 0.3)',
+      pointRadius: 2,
+      hoverRadius: 3
+    };
+
+    const frontierDatasetConfig = {
+      label: 'Efficient frontier',
+      showLine: true,
+      tension: 0.2,
+      backgroundColor: 'rgba(34, 139, 34, 0.35)',
+      borderColor: 'rgba(34, 139, 34, 0.9)',
+      borderWidth: 2,
+      pointRadius: 3
+    };
+
+    let selectedIndex = Math.min(
+      Math.max(Number.isFinite(payload?.selectedIndex) ? payload.selectedIndex : 0, 0),
+      frontierPoints.length - 1
+    );
+
+    chart = new Chart(ctx, {
+      type: 'scatter',
+      data: {
+        datasets: [
+          buildDataset(randomPoints, randomDatasetConfig),
+          buildDataset(frontierPoints, frontierDatasetConfig),
+          {
+            label: 'Selected portfolio',
+            data: [],
+            backgroundColor: '#d63384',
+            borderColor: '#d63384',
+            pointRadius: 6,
+            hoverRadius: 6
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: 'top' },
+          tooltip: {
+            callbacks: {
+              title: (items) => (items.length ? items[0].dataset.label : ''),
+              label: (context) => {
+                const raw = context.raw || {};                const volPercent = raw.volatilityUnit != null ? toPercent(raw.volatilityUnit) : toPercent(Math.sqrt(raw.volatilityUnit ?? 0));
+                return `Return: ${formatPercentValue(toPercent(raw.returnUnit ?? 0))} | Volatility: ${formatPercentValue(volPercent)}`;
+}
+            }
+          }
+        },
+        scales: {
+          x: { title: { display: true, text: 'Volatility (annual %, log1p)' } },
+          y: { title: { display: true, text: 'Return (annual, signed log)' } }
+        }
+      }
+    });
+
+    configureTicks();
+    updateSliderUI();
+    updateScaleLabel();
+    updateAxisTitle();
+    updateHighlight(selectedIndex);
+    chart.update();
+
+    if (slider && !sliderBound) {
+      slider.addEventListener('input', (event) => {
+        const next = Number.parseInt(event.target.value, 10);
+        if (Number.isFinite(next)) {
+          updateHighlight(next);
+        }
+      });
+      sliderBound = true;
+    }
+
+    if (scaleButton && !scaleBound) {
+      scaleButton.addEventListener('click', () => {
+        scaleMode = scaleMode === SCALE.LOG ? SCALE.LINEAR : SCALE.LOG;
+        updateScaleLabel();
+        updateAxisTitle();
+        configureTicks();
+        rebuildDatasets();
+        updateHighlight(selectedIndex);
+        chart.update();
+      });
+      scaleBound = true;
+    }
+
+    const ensureChart = () => {
+      if (!chart) return;
+      chart.resize();
+    };
+
+    if (visTabPane && (visTabPane.classList.contains('show') || visTabPane.classList.contains('active'))) {
+      requestAnimationFrame(() => ensureChart());
+    }
+
+    visTabButton?.addEventListener('click', () => {
+      setTimeout(() => ensureChart(), 0);
+    });
+  });
+</script>
+
+
+
+
+
+
+
 
 
 <style>
@@ -304,6 +728,10 @@
     margin-bottom: 0;
   }
 
+  .target-input-disabled {
+    opacity: 0.6;
+  }
+
   @@media (prefers-reduced-motion: reduce) {
     .per-asset-toggle,
     .target-toggle,
@@ -315,20 +743,10 @@
 </style>
 <script>
   document.addEventListener('DOMContentLoaded', function () {
-    const tabs = document.querySelectorAll('#optimizerTabs .nav-link');
-    const panes = document.querySelectorAll('.tab-pane');
-    tabs.forEach(btn => {
-      btn.addEventListener('click', () => {
-        tabs.forEach(b => b.classList.remove('active'));
-        panes.forEach(p => p.classList.remove('show', 'active'));
-        btn.classList.add('active');
-        const targetId = btn.getAttribute('data-target');
-        const pane = document.getElementById(targetId);
-        if (pane) {
-          pane.classList.add('show', 'active');
-        }
-      });
-    });
+    const tabButtons = Array.from(document.querySelectorAll('#optimizerTabs .nav-link'));
+    const panes = Array.from(document.querySelectorAll('.tab-pane'));
+    const activeTabField = document.getElementById('active-tab-field');
+    const optimizeButtonWrapper = document.getElementById('optimize-button-wrapper');
 
     const methodSelect = document.getElementById('method-select');
     const cvarOptions = document.getElementById('cvar-options');
@@ -336,10 +754,72 @@
     const targetToggle = document.getElementById('target-toggle');
     const targetContent = document.getElementById('target-content');
     const targetSelect = document.getElementById('target-select');
-    const targetVolInput = document.getElementById('target-volatility-input');
+    const targetReturnProInput = document.getElementById('target-return-pro');
+    const targetReturnWrapper = document.getElementById('target-return-wrapper');
+    const targetCardStateField = document.getElementById('target-card-state');
+    const perAssetStateField = document.getElementById('per-asset-state');
+    const targetReturnValue = '@((int)Markowitz.Core.Models.OptimizationTarget.TargetReturn)';
+    const minVolatilityValue = '@((int)Markowitz.Core.Models.OptimizationTarget.MinVolatility)';
+    const parseBool = (value) => value === 'true' || value === 'True';
+    const setTargetReturnState = (enabled) => {
+      if (!targetReturnProInput) return;
+      if (enabled) {
+        targetReturnProInput.removeAttribute('disabled');
+      } else {
+        targetReturnProInput.setAttribute('disabled', 'disabled');
+      }
+      if (targetReturnWrapper) {
+        targetReturnWrapper.classList.toggle('target-input-disabled', !enabled);
+        targetReturnWrapper.setAttribute('aria-disabled', enabled ? 'false' : 'true');
+      }
+    };
+
+    const updateTargetReturnAvailability = () => {
+      const isQuadratic = methodSelect?.value === 'QuadraticProgramming';
+      const isTargetReturn = targetSelect?.value === targetReturnValue;
+      setTargetReturnState(!!isQuadratic && !!isTargetReturn);
+    };
+
+    const activateTab = (key) => {
+      tabButtons.forEach(btn => {
+        const btnKey = btn.getAttribute('data-tab-key') || 'basic';
+        const isActive = btnKey === key;
+        btn.classList.toggle('active', isActive);
+        btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+      });
+
+      panes.forEach(pane => {
+        const paneKey = pane.getAttribute('data-pane-key') || pane.id;
+        const isActive = paneKey === key || pane.id === key;
+        pane.classList.toggle('show', isActive);
+        pane.classList.toggle('active', isActive);
+      });
+
+      if (activeTabField) {
+        activeTabField.value = key;
+      }
+      if (optimizeButtonWrapper) {
+        optimizeButtonWrapper.classList.toggle('d-none', key === 'visualizations');
+      }
+      if (key === 'pro') {
+        updateTargetReturnAvailability();
+      }
+    };
+
+    const allowedTabs = new Set(['basic', 'pro', 'visualizations']);
+    const initialValue = (activeTabField?.value || 'basic').toLowerCase();
+    const initialTab = allowedTabs.has(initialValue) ? initialValue : 'basic';
+    activateTab(initialTab);
+
+    tabButtons.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const tabKey = btn.getAttribute('data-tab-key') || 'basic';
+        activateTab(tabKey);
+      });
+    });
 
     const toggleCvar = () => {
-      if (!methodSelect) return;
+      if (!methodSelect || !cvarOptions) return;
       cvarOptions.style.display = methodSelect.value === 'CvarLinearProgramming' ? '' : 'none';
     };
 
@@ -348,10 +828,14 @@
       targetToggle.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
       targetContent.classList.toggle('active', isExpanded);
       targetContent.hidden = !isExpanded;
+      if (targetCardStateField) {
+        targetCardStateField.value = isExpanded ? 'true' : 'false';
+      }
     };
 
     if (targetToggle && targetContent) {
-      setTargetState(false);
+      const initialTargetExpanded = targetCardStateField ? parseBool(targetCardStateField.value) : false;
+      setTargetState(initialTargetExpanded);
       targetToggle.addEventListener('click', (event) => {
         event.preventDefault();
         const isExpanded = targetToggle.getAttribute('aria-expanded') === 'true';
@@ -364,16 +848,18 @@
       if (targetWrapper) targetWrapper.classList.toggle('d-none', !isQuadratic);
       if (targetSelect) {
         targetSelect.disabled = !isQuadratic;
-        if (!isQuadratic) targetSelect.value = 'MinVolatility';
+        if (!isQuadratic) targetSelect.value = minVolatilityValue;
       }
-      if (targetVolInput) targetVolInput.disabled = !isQuadratic;
       if (!isQuadratic) setTargetState(false);
+      updateTargetReturnAvailability();
     };
 
     methodSelect?.addEventListener('change', () => {
       toggleCvar();
       updateTargetVisibility();
     });
+
+    targetSelect?.addEventListener('change', updateTargetReturnAvailability);
 
     toggleCvar();
     updateTargetVisibility();
@@ -401,8 +887,12 @@
         perAssetToggle.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
         perAssetContent.classList.toggle('active', isExpanded);
         perAssetContent.hidden = !isExpanded;
+        if (perAssetStateField) {
+          perAssetStateField.value = isExpanded ? 'true' : 'false';
+        }
       };
-      setPerAssetState(false);
+      const initialPerAssetExpanded = perAssetStateField ? parseBool(perAssetStateField.value) : false;
+      setPerAssetState(initialPerAssetExpanded);
       perAssetToggle.addEventListener('click', (event) => {
         event.preventDefault();
         const isExpanded = perAssetToggle.getAttribute('aria-expanded') === 'true';
@@ -425,5 +915,7 @@
     }
   });
 </script>
+
+
 
 

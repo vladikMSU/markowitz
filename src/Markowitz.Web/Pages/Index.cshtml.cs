@@ -1,4 +1,4 @@
-﻿using CsvHelper;
+using CsvHelper;
 using Markowitz.Core.Models;
 using Markowitz.Core.Services;
 using Microsoft.AspNetCore.Http;
@@ -14,6 +14,7 @@ public class IndexModel : PageModel
 {
     private readonly MarkowitzOptimizer _optimizer;
     private const string UploadSessionKey = "uploaded-files";
+    private const string VisualizationSessionKey = "visualization-data";
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
     public IndexModel(MarkowitzOptimizer optimizer) => _optimizer = optimizer;
@@ -22,10 +23,9 @@ public class IndexModel : PageModel
 
     [BindProperty] public DateTime? Start { get; set; }
     [BindProperty] public DateTime? End { get; set; }
-    [BindProperty] public double? TargetReturnAnnualPercent { get; set; }
+    [BindProperty] public double? CoreTargetReturnAnnualPercent { get; set; }
+    [BindProperty] public double? ProTargetReturnAnnualPercent { get; set; }
     [BindProperty] public OptimizationTarget Target { get; set; } = OptimizationTarget.MinVolatility;
-    [BindProperty] public double? TargetVolatilityAnnualPercent { get; set; }
-
     [BindProperty] public OptimizationMethod Method { get; set; } = OptimizationMethod.QuadraticProgramming;
     [BindProperty] public bool AllowShort { get; set; }
     [BindProperty] public double? GlobalMin { get; set; }
@@ -34,12 +34,17 @@ public class IndexModel : PageModel
     [BindProperty] public double? CvarAlpha { get; set; } = 0.95;
     [BindProperty] public IFormFile? ScenarioFile { get; set; }
     [BindProperty] public List<AssetConstraintInput> AssetBounds { get; set; } = new();
+    [BindProperty] public string ActiveTab { get; set; } = "basic";
+    [BindProperty] public bool TargetCardExpanded { get; set; }
+    [BindProperty] public bool PerAssetExpanded { get; set; }
 
     public OptimizationResult? Result { get; set; }
+    public PortfolioVisualization? Visualization { get; private set; }
     public List<string> UploadedFileNames { get; private set; } = new();
 
     public void OnGet()
     {
+        ActiveTab = NormalizeActiveTab(ActiveTab);
         var uploads = LoadStoredUploads();
         UploadedFileNames = uploads.Select(u => u.FileName).ToList();
         if (uploads.Count > 0)
@@ -49,15 +54,20 @@ public class IndexModel : PageModel
                 .ToArray();
             SyncAssetBounds(tickers);
         }
+
+        Visualization = uploads.Count > 0 ? LoadStoredVisualization() : null;
+        if (uploads.Count == 0)
+            SaveStoredVisualization(null);
     }
 
     public async Task<IActionResult> OnPostAsync()
     {
+        ActiveTab = NormalizeActiveTab(ActiveTab);
         var uploads = LoadStoredUploads();
         UploadedFileNames = uploads.Select(u => u.FileName).ToList();
+        Visualization = LoadStoredVisualization();
 
         var action = Request.Form["action"].FirstOrDefault();
-        var isUploadOnly = string.Equals(action, "upload", StringComparison.OrdinalIgnoreCase);
         var removeTarget = Request.Form["removeFile"].FirstOrDefault();
         if (!string.IsNullOrWhiteSpace(removeTarget))
         {
@@ -70,7 +80,6 @@ public class IndexModel : PageModel
                 .ToArray();
             SyncAssetBounds(remainingTickers);
             Result = null;
-            return Page();
         }
 
         if (Files.Count > 0)
@@ -109,6 +118,8 @@ public class IndexModel : PageModel
             ModelState.AddModelError(string.Empty, "Upload at least one CSV.");
             SyncAssetBounds(Array.Empty<string>());
             Result = null;
+            Visualization = null;
+            SaveStoredVisualization(null);
             return Page();
         }
 
@@ -117,14 +128,11 @@ public class IndexModel : PageModel
             .ToArray();
         SyncAssetBounds(orderedTickers);
 
-        if (isUploadOnly)
-        {
-            Result = null;
-            return Page();
-        }
+        var activeTabIsPro = string.Equals(ActiveTab, "pro", StringComparison.OrdinalIgnoreCase);
+        var requestMethod = activeTabIsPro ? Method : OptimizationMethod.QuadraticProgramming;
 
         List<double[]>? scenarioData = null;
-        if (ScenarioFile is { Length: > 0 })
+        if (activeTabIsPro && ScenarioFile is { Length: > 0 })
         {
             try
             {
@@ -137,20 +145,51 @@ public class IndexModel : PageModel
             }
         }
 
-        var lowerDict = AssetBounds
-            .Where(a => a.Lower.HasValue)
-            .ToDictionary(a => a.Ticker, a => a.Lower!.Value, StringComparer.OrdinalIgnoreCase);
-        var upperDict = AssetBounds
-            .Where(a => a.Upper.HasValue)
-            .ToDictionary(a => a.Ticker, a => a.Upper!.Value, StringComparer.OrdinalIgnoreCase);
-
         if (Method != OptimizationMethod.QuadraticProgramming)
         {
             Target = OptimizationTarget.MinVolatility;
-            TargetVolatilityAnnualPercent = null;
         }
 
-        if (Method == OptimizationMethod.QuadraticProgramming && Target == OptimizationTarget.TargetReturn && TargetReturnAnnualPercent is null)
+        Dictionary<string, double> lowerDict;
+        Dictionary<string, double> upperDict;
+
+        if (activeTabIsPro)
+        {
+            lowerDict = AssetBounds
+                .Where(a => a.Lower.HasValue)
+                .ToDictionary(a => a.Ticker, a => a.Lower!.Value, StringComparer.OrdinalIgnoreCase);
+            upperDict = AssetBounds
+                .Where(a => a.Upper.HasValue)
+                .ToDictionary(a => a.Ticker, a => a.Upper!.Value, StringComparer.OrdinalIgnoreCase);
+
+            if (GlobalMin is double gMin && GlobalMax is double gMax && gMin > gMax)
+            {
+                ModelState.AddModelError(string.Empty, "Global min weight cannot exceed global max weight.");
+            }
+
+            foreach (var bound in AssetBounds)
+            {
+                if (!string.IsNullOrWhiteSpace(bound.Ticker) &&
+                    bound.Lower.HasValue && bound.Upper.HasValue &&
+                    bound.Lower.Value > bound.Upper.Value)
+                {
+                    ModelState.AddModelError(string.Empty, $"Lower bound for '{bound.Ticker}' cannot exceed its upper bound.");
+                }
+            }
+        }
+        else
+        {
+            lowerDict = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+            upperDict = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        var targetReturnPercent = activeTabIsPro ? ProTargetReturnAnnualPercent : CoreTargetReturnAnnualPercent;
+        var requestTarget = activeTabIsPro
+            ? Target
+            : (targetReturnPercent.HasValue ? OptimizationTarget.TargetReturn : OptimizationTarget.MinVolatility);
+
+        if (activeTabIsPro && requestMethod == OptimizationMethod.QuadraticProgramming &&
+            requestTarget == OptimizationTarget.TargetReturn && ProTargetReturnAnnualPercent is null)
         {
             ModelState.AddModelError(string.Empty, "Provide a target return percentage for the selected optimization target.");
         }
@@ -158,6 +197,7 @@ public class IndexModel : PageModel
         if (!ModelState.IsValid)
         {
             Result = null;
+            Visualization = LoadStoredVisualization();
             return Page();
         }
 
@@ -166,27 +206,67 @@ public class IndexModel : PageModel
             PricesByTicker = dict,
             Start = Start,
             End = End,
-            TargetReturnAnnual = TargetReturnAnnualPercent / 100,
-            TargetVolatilityAnnual = TargetVolatilityAnnualPercent / 100,
-            RiskFreeAnnual = RiskFreeAnnual,
-            Method = Method,
-            Target = Target,
+            TargetReturnAnnual = targetReturnPercent.HasValue ? targetReturnPercent.Value / 100 : null,
+            RiskFreeAnnual = activeTabIsPro ? RiskFreeAnnual : 0.0,
+            Method = requestMethod,
+            Target = requestTarget,
             AllowShort = AllowShort,
-            GlobalMinWeight = GlobalMin,
-            GlobalMaxWeight = GlobalMax,
-            CvarAlpha = CvarAlpha,
-            LowerBounds = lowerDict.Count > 0 ? lowerDict : null,
-            UpperBounds = upperDict.Count > 0 ? upperDict : null,
-            ScenarioReturns = scenarioData
+            GlobalMinWeight = activeTabIsPro ? GlobalMin : null,
+            GlobalMaxWeight = activeTabIsPro ? GlobalMax : null,
+            CvarAlpha = activeTabIsPro && requestMethod == OptimizationMethod.CvarLinearProgramming ? CvarAlpha : null,
+            LowerBounds = activeTabIsPro && lowerDict.Count > 0 ? lowerDict : null,
+            UpperBounds = activeTabIsPro && upperDict.Count > 0 ? upperDict : null,
+            ScenarioReturns = activeTabIsPro ? scenarioData : null
         };
 
-        try
+        var visualizationRequest = new OptimizationRequest
         {
-            Result = _optimizer.Optimize(req);
+            PricesByTicker = dict,
+            Start = Start,
+            End = End,
+            TargetReturnAnnual = null,
+            RiskFreeAnnual = activeTabIsPro ? RiskFreeAnnual : 0.0,
+            Method = OptimizationMethod.QuadraticProgramming,
+            Target = OptimizationTarget.MaxReturn,
+            AllowShort = AllowShort,
+            GlobalMinWeight = activeTabIsPro ? GlobalMin : null,
+            GlobalMaxWeight = activeTabIsPro ? GlobalMax : null,
+            LowerBounds = activeTabIsPro && lowerDict.Count > 0 ? lowerDict : null,
+            UpperBounds = activeTabIsPro && upperDict.Count > 0 ? upperDict : null,
+            ScenarioReturns = activeTabIsPro ? scenarioData : null,
+            CvarAlpha = activeTabIsPro && requestMethod == OptimizationMethod.CvarLinearProgramming ? CvarAlpha : null,
+            LookbackDays = req.LookbackDays,
+            PeriodsPerYearOverride = req.PeriodsPerYearOverride
+        };
+
+        if (!string.Equals(action, "optimize", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                Visualization = _optimizer.GenerateVisualization(visualizationRequest);
+            }
+            catch
+            {
+                Visualization = null;
+            }
+
+            SaveStoredVisualization(Visualization);
         }
-        catch (Exception ex)
+
+        if (string.Equals(action, "optimize", StringComparison.OrdinalIgnoreCase))
         {
-            ModelState.AddModelError(string.Empty, ex.Message);
+            try
+            {
+                Result = _optimizer.Optimize(req);
+            }
+            catch (Exception ex)
+            {
+                ModelState.AddModelError(string.Empty, ex.Message);
+            }
+        }
+        else
+        {
+            Result = null;
         }
 
         return Page();
@@ -294,6 +374,35 @@ public class IndexModel : PageModel
         HttpContext.Session.SetString(UploadSessionKey, json);
     }
 
+    private PortfolioVisualization? LoadStoredVisualization()
+    {
+        var json = HttpContext.Session.GetString(VisualizationSessionKey);
+        if (string.IsNullOrEmpty(json))
+            return null;
+
+        try
+        {
+            return JsonSerializer.Deserialize<PortfolioVisualization>(json, JsonOptions);
+        }
+        catch
+        {
+            HttpContext.Session.Remove(VisualizationSessionKey);
+            return null;
+        }
+    }
+
+    private void SaveStoredVisualization(PortfolioVisualization? visualization)
+    {
+        if (visualization is null)
+        {
+            HttpContext.Session.Remove(VisualizationSessionKey);
+            return;
+        }
+
+        var json = JsonSerializer.Serialize(visualization, JsonOptions);
+        HttpContext.Session.SetString(VisualizationSessionKey, json);
+    }
+
     private void SyncAssetBounds(string[] tickers)
     {
         var existing = AssetBounds.ToDictionary(a => a.Ticker ?? string.Empty, StringComparer.OrdinalIgnoreCase);
@@ -341,6 +450,15 @@ public class IndexModel : PageModel
             throw new InvalidOperationException("Scenario file does not contain any scenarios.");
 
         return rows;
+    }
+
+    private static string NormalizeActiveTab(string? tab)
+    {
+        if (string.Equals(tab, "pro", StringComparison.OrdinalIgnoreCase))
+            return "pro";
+        if (string.Equals(tab, "visualizations", StringComparison.OrdinalIgnoreCase))
+            return "visualizations";
+        return "basic";
     }
 
     private sealed class StoredUpload
