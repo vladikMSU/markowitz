@@ -30,25 +30,45 @@
   <div class="mb-3">
     <label class="form-label">CSV files (timestamp, open, high, low, close)</label>
     <input type="file" name="Files" multiple class="form-control" />
-    <small class="form-text text-muted">Ticker name is taken from the file name.</small>  @if (Model.UploadedFileNames.Any())
-  {
-    <div class="mt-3">
-      <label class="form-label">Uploaded files</label>
-      <ul class="list-unstyled mb-0">
-        @foreach (var fileName in Model.UploadedFileNames)
-        {
-          <li class="d-flex align-items-center gap-2">
-            <button type="submit" name="removeFile" value="@fileName" class="btn btn-sm btn-link text-danger p-0" formnovalidate title="Remove file">
-              &times;
-            </button>
-            <span>@fileName</span>
-          </li>
-        }
-      </ul>
-    </div>
-  }
+    <small class="form-text text-muted">Ticker name is taken from the file name.</small>
+    @if (Model.UploadedFiles.Any())
+    {
+      <div class="mt-3">
+        <label class="form-label">Uploaded files</label>
+        <div class="table-responsive">
+          <table class="table table-sm align-middle mb-0">
+            <thead>
+              <tr>
+                <th scope="col">File</th>
+                <th scope="col">Start</th>
+                <th scope="col">End</th>
+                <th scope="col">Avg annual return</th>
+                <th scope="col">Annual volatility</th>
+                <th scope="col" class="text-center">Remove</th>
+              </tr>
+            </thead>
+            <tbody>
+              @foreach (var file in Model.UploadedFiles)
+              {
+                <tr>
+                  <td>@file.FileName</td>
+                  <td>@(file.StartDate?.ToString("yyyy-MM-dd") ?? "-")</td>
+                  <td>@(file.EndDate?.ToString("yyyy-MM-dd") ?? "-")</td>
+                  <td>@(file.AverageAnnualReturn.HasValue ? file.AverageAnnualReturn.Value.ToString("P2") : "-")</td>
+                  <td>@(file.AnnualVolatility.HasValue ? file.AnnualVolatility.Value.ToString("P2") : "-")</td>
+                  <td class="text-center">
+                    <button type="submit" name="removeFile" value="@file.FileName" class="btn btn-sm btn-link text-danger p-0" formnovalidate title="Remove file">
+                      &times;
+                    </button>
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      </div>
+    }
   </div>
-
   <ul class="nav nav-tabs" id="optimizerTabs" role="tablist">
     <li class="nav-item" role="presentation">
       <button type="button" class="nav-link @(basicTabIsActive ? "active" : string.Empty)" data-target="basic-tab" data-tab-key="basic" id="basic-tab-btn" aria-selected="@(basicTabIsActive ? "true" : "false")">Core</button>
@@ -915,7 +935,3 @@
     }
   });
 </script>
-
-
-
-

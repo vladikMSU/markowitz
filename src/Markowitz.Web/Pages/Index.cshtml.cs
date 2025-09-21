@@ -15,6 +15,8 @@ public class IndexModel : PageModel
     private readonly MarkowitzOptimizer _optimizer;
     private const string UploadSessionKey = "uploaded-files";
     private const string VisualizationSessionKey = "visualization-data";
+
+    private const double SecondsPerYear = 365.25 * 24 * 3600;
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
     public IndexModel(MarkowitzOptimizer optimizer) => _optimizer = optimizer;
@@ -42,11 +44,13 @@ public class IndexModel : PageModel
     public PortfolioVisualization? Visualization { get; private set; }
     public List<string> UploadedFileNames { get; private set; } = new();
 
+    public List<UploadedFileSummary> UploadedFiles { get; private set; } = new();
+
     public void OnGet()
     {
         ActiveTab = NormalizeActiveTab(ActiveTab);
         var uploads = LoadStoredUploads();
-        UploadedFileNames = uploads.Select(u => u.FileName).ToList();
+        RefreshUploadedFiles(uploads);
         if (uploads.Count > 0)
         {
             var tickers = uploads.Select(u => u.Ticker)
@@ -64,7 +68,7 @@ public class IndexModel : PageModel
     {
         ActiveTab = NormalizeActiveTab(ActiveTab);
         var uploads = LoadStoredUploads();
-        UploadedFileNames = uploads.Select(u => u.FileName).ToList();
+        RefreshUploadedFiles(uploads);
         Visualization = LoadStoredVisualization();
 
         var action = Request.Form["action"].FirstOrDefault();
@@ -74,7 +78,7 @@ public class IndexModel : PageModel
             if (uploads.RemoveAll(u => string.Equals(u.FileName, removeTarget, StringComparison.OrdinalIgnoreCase)) > 0)
                 SaveStoredUploads(uploads);
 
-            UploadedFileNames = uploads.Select(u => u.FileName).ToList();
+            RefreshUploadedFiles(uploads);
             var remainingTickers = uploads.Select(u => u.Ticker)
                 .OrderBy(t => t, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
@@ -90,7 +94,7 @@ public class IndexModel : PageModel
                 if (error is not null)
                 {
                     ModelState.AddModelError(string.Empty, error);
-                    UploadedFileNames = uploads.Select(u => u.FileName).ToList();
+                    RefreshUploadedFiles(uploads);
                     var tickers = uploads.Select(u => u.Ticker)
                         .OrderBy(t => t, StringComparer.OrdinalIgnoreCase)
                         .ToArray();
@@ -107,7 +111,7 @@ public class IndexModel : PageModel
             SaveStoredUploads(uploads);
         }
 
-        UploadedFileNames = uploads.Select(u => u.FileName).ToList();
+        RefreshUploadedFiles(uploads);
 
         var dict = new Dictionary<string, List<PriceBar>>(StringComparer.OrdinalIgnoreCase);
         foreach (var upload in uploads)
@@ -271,6 +275,87 @@ public class IndexModel : PageModel
 
         return Page();
     }
+
+
+
+    private void RefreshUploadedFiles(List<StoredUpload> uploads)
+    {
+        UploadedFileNames = uploads.Select(u => u.FileName).ToList();
+        UploadedFiles = uploads.Select(BuildUploadedFileSummary).ToList();
+    }
+
+    private static UploadedFileSummary BuildUploadedFileSummary(StoredUpload upload)
+    {
+        var summary = new UploadedFileSummary
+        {
+            FileName = upload.FileName
+        };
+
+        if (upload.Bars is null || upload.Bars.Count == 0)
+            return summary;
+
+        var sorted = new SortedDictionary<DateTime, double>();
+        foreach (var bar in upload.Bars.OrderBy(b => b.Timestamp))
+            sorted[bar.Timestamp] = (double)bar.Close;
+
+        if (sorted.Count == 0)
+            return summary;
+
+        summary.StartDate = sorted.First().Key;
+        summary.EndDate = sorted.Last().Key;
+
+        if (sorted.Count < 2)
+            return summary;
+
+        var timestamps = sorted.Keys.ToList();
+        var closes = sorted.Values.ToList();
+        var returns = new double[closes.Count - 1];
+
+        for (int i = 1; i < closes.Count; i++)
+        {
+            var previous = closes[i - 1];
+            var current = closes[i];
+            if (!double.IsFinite(previous) || !double.IsFinite(current) || Math.Abs(previous) < 1e-12)
+                return summary;
+
+            var periodReturn = (current / previous) - 1.0;
+            if (!double.IsFinite(periodReturn))
+                return summary;
+
+            returns[i - 1] = periodReturn;
+        }
+
+        var first = timestamps[0];
+        var last = timestamps[timestamps.Count - 1];
+        var durationSeconds = (last - first).TotalSeconds;
+        if (durationSeconds <= 0)
+            return summary;
+
+        var periodsPerYear = returns.Length * SecondsPerYear / durationSeconds;
+        if (!double.IsFinite(periodsPerYear) || periodsPerYear <= 0)
+            return summary;
+
+        var mean = returns.Average();
+        summary.AverageAnnualReturn = mean * periodsPerYear;
+
+        if (returns.Length >= 2)
+        {
+            double varianceSum = 0;
+            for (int i = 0; i < returns.Length; i++)
+            {
+                var diff = returns[i] - mean;
+                varianceSum += diff * diff;
+            }
+
+            var variancePeriod = varianceSum / (returns.Length - 1);
+            var varianceAnnual = variancePeriod * periodsPerYear;
+            summary.AnnualVolatility = Math.Sqrt(Math.Max(varianceAnnual, 0.0));
+        }
+
+        return summary;
+    }
+
+
 
     private async Task<(StoredUpload? Upload, string? Error)> ParseUploadedFileAsync(IFormFile file)
     {
@@ -474,5 +559,15 @@ public class IndexModel : PageModel
         public double? Lower { get; set; }
         public double? Upper { get; set; }
     }
+
+    public sealed class UploadedFileSummary
+    {
+        public string FileName { get; set; } = string.Empty;
+        public DateTime? StartDate { get; set; }
+        public DateTime? EndDate { get; set; }
+        public double? AverageAnnualReturn { get; set; }
+        public double? AnnualVolatility { get; set; }
+    }
 }
+
 
