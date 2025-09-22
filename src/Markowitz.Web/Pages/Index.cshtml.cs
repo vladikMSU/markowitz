@@ -39,6 +39,7 @@ public class IndexModel : PageModel
     [BindProperty] public string ActiveTab { get; set; } = "basic";
     [BindProperty] public bool TargetCardExpanded { get; set; }
     [BindProperty] public bool PerAssetExpanded { get; set; }
+    [BindProperty] public bool UseIntersectionStatistics { get; set; }
 
     public OptimizationResult? Result { get; set; }
     public PortfolioVisualization? Visualization { get; private set; }
@@ -50,7 +51,7 @@ public class IndexModel : PageModel
     {
         ActiveTab = NormalizeActiveTab(ActiveTab);
         var uploads = LoadStoredUploads();
-        RefreshUploadedFiles(uploads);
+        RefreshUploadedFiles(uploads, UseIntersectionStatistics);
         if (uploads.Count > 0)
         {
             var tickers = uploads.Select(u => u.Ticker)
@@ -68,17 +69,24 @@ public class IndexModel : PageModel
     {
         ActiveTab = NormalizeActiveTab(ActiveTab);
         var uploads = LoadStoredUploads();
-        RefreshUploadedFiles(uploads);
         Visualization = LoadStoredVisualization();
 
         var action = Request.Form["action"].FirstOrDefault();
         var removeTarget = Request.Form["removeFile"].FirstOrDefault();
+
+        if (string.Equals(action, "toggle-intersection", StringComparison.OrdinalIgnoreCase))
+        {
+            UseIntersectionStatistics = !UseIntersectionStatistics;
+            RefreshUploadedFiles(uploads, UseIntersectionStatistics);
+            Result = null;
+            return Page();
+        }
         if (!string.IsNullOrWhiteSpace(removeTarget))
         {
             if (uploads.RemoveAll(u => string.Equals(u.FileName, removeTarget, StringComparison.OrdinalIgnoreCase)) > 0)
                 SaveStoredUploads(uploads);
 
-            RefreshUploadedFiles(uploads);
+            RefreshUploadedFiles(uploads, UseIntersectionStatistics);
             var remainingTickers = uploads.Select(u => u.Ticker)
                 .OrderBy(t => t, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
@@ -94,7 +102,7 @@ public class IndexModel : PageModel
                 if (error is not null)
                 {
                     ModelState.AddModelError(string.Empty, error);
-                    RefreshUploadedFiles(uploads);
+                    RefreshUploadedFiles(uploads, UseIntersectionStatistics);
                     var tickers = uploads.Select(u => u.Ticker)
                         .OrderBy(t => t, StringComparer.OrdinalIgnoreCase)
                         .ToArray();
@@ -111,7 +119,7 @@ public class IndexModel : PageModel
             SaveStoredUploads(uploads);
         }
 
-        RefreshUploadedFiles(uploads);
+        RefreshUploadedFiles(uploads, UseIntersectionStatistics);
 
         var dict = new Dictionary<string, List<PriceBar>>(StringComparer.OrdinalIgnoreCase);
         foreach (var upload in uploads)
@@ -278,13 +286,56 @@ public class IndexModel : PageModel
 
 
 
-    private void RefreshUploadedFiles(List<StoredUpload> uploads)
+    private void RefreshUploadedFiles(List<StoredUpload> uploads, bool useIntersectionStatistics)
     {
         UploadedFileNames = uploads.Select(u => u.FileName).ToList();
-        UploadedFiles = uploads.Select(BuildUploadedFileSummary).ToList();
+
+        IReadOnlyList<DateTime>? alignedTimeline = null;
+        if (useIntersectionStatistics)
+            alignedTimeline = BuildAlignedTimeline(uploads);
+
+        UploadedFiles = uploads
+            .Select(upload => BuildUploadedFileSummary(upload, alignedTimeline))
+            .ToList();
     }
 
-    private static UploadedFileSummary BuildUploadedFileSummary(StoredUpload upload)
+    private List<DateTime> BuildAlignedTimeline(List<StoredUpload> uploads)
+    {
+        if (uploads.Count == 0)
+            return new List<DateTime>();
+
+        HashSet<DateTime>? intersection = null;
+        foreach (var upload in uploads)
+        {
+            if (upload.Bars is null || upload.Bars.Count == 0)
+                return new List<DateTime>();
+
+            var tickerDates = new HashSet<DateTime>(upload.Bars.Select(b => b.Timestamp));
+            if (intersection is null)
+                intersection = tickerDates;
+            else
+                intersection.IntersectWith(tickerDates);
+
+            if (intersection.Count == 0)
+                return new List<DateTime>();
+        }
+
+        if (intersection is null || intersection.Count == 0)
+            return new List<DateTime>();
+
+        var ordered = intersection
+            .OrderBy(d => d)
+            .ToList();
+
+        if (Start.HasValue)
+            ordered = ordered.Where(d => d >= Start.Value).ToList();
+        if (End.HasValue)
+            ordered = ordered.Where(d => d <= End.Value).ToList();
+
+        return ordered;
+    }
+
+    private static UploadedFileSummary BuildUploadedFileSummary(StoredUpload upload, IReadOnlyList<DateTime>? alignedTimeline)
     {
         var summary = new UploadedFileSummary
         {
@@ -301,14 +352,56 @@ public class IndexModel : PageModel
         if (sorted.Count == 0)
             return summary;
 
-        summary.StartDate = sorted.First().Key;
-        summary.EndDate = sorted.Last().Key;
+        IReadOnlyList<DateTime> timeline;
+        if (alignedTimeline is not null)
+        {
+            if (alignedTimeline.Count == 0)
+                return summary;
 
-        if (sorted.Count < 2)
+            foreach (var date in alignedTimeline)
+            {
+                if (!sorted.ContainsKey(date))
+                    return summary;
+            }
+
+            timeline = alignedTimeline;
+            summary.StartDate = timeline[0];
+            summary.EndDate = timeline[timeline.Count - 1];
+        }
+        else
+        {
+            var ordered = sorted.Keys.ToList();
+            if (ordered.Count == 0)
+                return summary;
+
+            timeline = ordered;
+            summary.StartDate = ordered[0];
+            summary.EndDate = ordered[ordered.Count - 1];
+        }
+
+        if (timeline.Count < 2)
             return summary;
 
-        var timestamps = sorted.Keys.ToList();
-        var closes = sorted.Values.ToList();
+        var closes = new List<double>(timeline.Count);
+        foreach (var date in timeline)
+        {
+            if (!sorted.TryGetValue(date, out var close))
+                return summary;
+            closes.Add(close);
+        }
+
+        PopulateSummaryMetrics(summary, timeline, closes);
+        return summary;
+    }
+
+    private static void PopulateSummaryMetrics(
+        UploadedFileSummary summary,
+        IReadOnlyList<DateTime> timeline,
+        IReadOnlyList<double> closes)
+    {
+        if (closes.Count < 2)
+            return;
+
         var returns = new double[closes.Count - 1];
 
         for (int i = 1; i < closes.Count; i++)
@@ -316,24 +409,22 @@ public class IndexModel : PageModel
             var previous = closes[i - 1];
             var current = closes[i];
             if (!double.IsFinite(previous) || !double.IsFinite(current) || Math.Abs(previous) < 1e-12)
-                return summary;
+                return;
 
             var periodReturn = (current / previous) - 1.0;
             if (!double.IsFinite(periodReturn))
-                return summary;
+                return;
 
             returns[i - 1] = periodReturn;
         }
 
-        var first = timestamps[0];
-        var last = timestamps[timestamps.Count - 1];
-        var durationSeconds = (last - first).TotalSeconds;
+        var durationSeconds = (timeline[timeline.Count - 1] - timeline[0]).TotalSeconds;
         if (durationSeconds <= 0)
-            return summary;
+            return;
 
         var periodsPerYear = returns.Length * SecondsPerYear / durationSeconds;
         if (!double.IsFinite(periodsPerYear) || periodsPerYear <= 0)
-            return summary;
+            return;
 
         var mean = returns.Average();
         summary.AverageAnnualReturn = mean * periodsPerYear;
@@ -351,8 +442,6 @@ public class IndexModel : PageModel
             var varianceAnnual = variancePeriod * periodsPerYear;
             summary.AnnualVolatility = Math.Sqrt(Math.Max(varianceAnnual, 0.0));
         }
-
-        return summary;
     }
 
 
