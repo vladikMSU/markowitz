@@ -687,7 +687,6 @@ public class MarkowitzOptimizer
         var frontierPoints = frontierCandidates
             .GroupBy(c => Math.Round(c.ExpectedAnnual, 8))
             .Select(g => g.OrderBy(c => c.VolatilityAnnual).First())
-            .OrderBy(c => c.ExpectedAnnual)
             .Select(c => new PortfolioFrontierPoint
             {
                 ExpectedReturnAnnual = c.ExpectedAnnual,
@@ -696,6 +695,8 @@ public class MarkowitzOptimizer
                 Weights = new Dictionary<string, double>(c.Weights)
             })
             .ToList();
+
+        frontierPoints = FilterDominatedFrontierPoints(frontierPoints);
 
         if (frontierPoints.Count == 0)
         {
@@ -732,6 +733,38 @@ public class MarkowitzOptimizer
             EfficientFrontier = frontierPoints,
             SelectedFrontierIndex = selectedIndex
         };
+    }
+
+    private static List<PortfolioFrontierPoint> FilterDominatedFrontierPoints(List<PortfolioFrontierPoint> points)
+    {
+        if (points.Count <= 1)
+            return points
+                .OrderBy(p => p.ExpectedReturnAnnual)
+                .ToList();
+
+        const double tolerance = 1e-9;
+
+        var orderedByVolatility = points
+            .OrderBy(p => p.VolatilityAnnual)
+            .ThenBy(p => p.ExpectedReturnAnnual)
+            .ToList();
+
+        var efficient = new List<PortfolioFrontierPoint>(orderedByVolatility.Count);
+        double bestReturn = double.NegativeInfinity;
+
+        foreach (var point in orderedByVolatility)
+        {
+            if (point.ExpectedReturnAnnual > bestReturn + tolerance)
+            {
+                efficient.Add(point);
+                bestReturn = point.ExpectedReturnAnnual;
+            }
+        }
+
+        return efficient
+            .OrderBy(p => p.ExpectedReturnAnnual)
+            .ThenBy(p => p.VolatilityAnnual)
+            .ToList();
     }
 
     private static List<PortfolioPoint> GenerateRandomPortfolios(
