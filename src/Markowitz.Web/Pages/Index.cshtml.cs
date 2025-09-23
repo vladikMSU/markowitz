@@ -76,6 +76,7 @@ public class IndexModel : PageModel
 
         if (string.Equals(action, "toggle-intersection", StringComparison.OrdinalIgnoreCase))
         {
+            ModelState.Remove(nameof(UseIntersectionStatistics));
             UseIntersectionStatistics = !UseIntersectionStatistics;
             RefreshUploadedFiles(uploads, UseIntersectionStatistics);
             Result = null;
